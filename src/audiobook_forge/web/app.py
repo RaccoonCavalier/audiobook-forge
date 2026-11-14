@@ -448,12 +448,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await pipeline.analyze(job.book_id, options, progress)
                 db.update_job(job.id, status=JobStatus.done, stage="done", message="分析完成")
             elif action == "synthesize":
-                # 单独点「合成」时可能还没生成分段，先补上规划
+                # 单独点「合成」时可能既没角色表也没分段，就地补齐，别让用户来回点
                 if not db.segments_for_book(job.book_id):
-                    book = pipeline.load_book(job.book_id)
                     cast = pipeline.load_cast(job.book_id)
                     if cast is None:
-                        raise ValueError("还没有角色表，请先分析（或直接点「一键生成」）")
+                        await pipeline.analyze(job.book_id, options, progress)
+                        cast = pipeline.load_cast(job.book_id)
+                    book = pipeline.load_book(job.book_id)
                     await run_in_threadpool(pipeline.plan, book, cast, options)
 
                 stats = await pipeline.synthesize(job.book_id, options, progress)

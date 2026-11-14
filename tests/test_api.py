@@ -141,16 +141,21 @@ def test_selective_chapter_synthesis_via_api(
     assert chapters[0]["seg_done"] == 0
 
 
-def test_synthesize_without_cast_fails_clearly(client: TestClient, sample_txt: Path) -> None:
+def test_synthesize_auto_analyzes_when_no_cast(client: TestClient, sample_txt: Path) -> None:
+    """新书直接点「合成」时，应自动分析+分段，而不是报错让用户再点一次。"""
     with sample_txt.open("rb") as fh:
         book_id = client.post(
             "/api/books", files={"file": ("sample.txt", fh, "text/plain")}
         ).json()["book_id"]
 
     res = client.post(f"/api/books/{book_id}/synthesize", json={"chapters": [0]})
+    assert res.status_code == 200
     job = _wait(client, res.json()["job_id"])
-    assert job["status"] == "failed"
-    assert "角色表" in job["message"]
+    assert job["status"] == "done", job.get("message")
+
+    detail = client.get(f"/api/books/{book_id}").json()
+    assert detail["cast"] is not None
+    assert detail["chapters"][0]["seg_done"] == detail["chapters"][0]["seg_total"] > 0
 
 
 def test_settings_roundtrip(client: TestClient, tmp_path: Path) -> None:
