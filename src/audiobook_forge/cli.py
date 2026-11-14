@@ -196,7 +196,7 @@ def cmd_doctor(args) -> int:
     except Exception as exc:  # noqa: BLE001
         check(f"TTS ({settings.tts.provider})", False, str(exc))
 
-    check("LLM", settings.llm.usable, settings.llm.model if settings.llm.usable else "未配置（可选）")
+    check("LLM（可选）", True, settings.llm.model if settings.llm.usable else "未配置，将使用规则分拣")
     print("\n全部通过，可以开工。" if ok else "\n有项目未通过，请先修复。")
     return 0 if ok else 1
 
