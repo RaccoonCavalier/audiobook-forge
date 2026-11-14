@@ -84,9 +84,20 @@ docker compose down          # 停止
 ```yaml
 volumes:
   - /volume1/docker/audiobook/data:/data
+  - /volume1/docker/audiobook/output:/output
 ```
 
-里面会有 `forge.db`、`cache/`、`books/`。**备份就备份这个目录。**
+`/data` 里会有 `forge.db`、`cache/`、`books/`。**备份就备份这个目录。**
+
+`/output` 是成品目录，挂出来以后可以直接在文件管理器里看到：
+
+```
+/output/江湖夜雨/江湖夜雨.mp3
+/output/江湖夜雨/江湖夜雨-第01章-雨夜.mp3
+/output/江湖夜雨/江湖夜雨.m4b
+```
+
+路径由 `ABF_OUTPUT_DIR` 控制（容器内默认 `/output`），想换位置改这个变量再挂载即可。
 
 ### 资源限制
 
@@ -148,6 +159,7 @@ server {
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `ABF_DATA_DIR` | `./data` | 数据根目录，Docker 里是 `/data` |
+| `ABF_OUTPUT_DIR` | `./output` | 成品目录，Docker 里是 `/output` |
 | `ABF_HOST` / `ABF_PORT` | `127.0.0.1` / `8848` | 监听地址 |
 | `ABF_TTS_PROVIDER` | `mock` | `mock` / `mimo` / `xfyun` |
 | `ABF_TTS_CONCURRENCY` | `4` | 同时合成几段。NAS 建议 2，本机可 6~8 |

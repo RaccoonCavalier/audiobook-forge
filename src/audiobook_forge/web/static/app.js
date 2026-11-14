@@ -87,6 +87,10 @@ function renderShelf() {
 
 /* ---------------------------------------------------------------- 详情 */
 
+function Path_basename(p) {
+  return String(p || "").split(/[\\/]/).pop();
+}
+
 async function openBook(id) {
   clearInterval(state.pollTimer);
   state.current = id;
@@ -119,11 +123,23 @@ function renderDetail() {
     : `<p class="muted">还没有角色表，先跑一次「分析」。</p>`;
 
   const manifest = d.manifest;
+  const chapterFiles = (manifest && manifest.chapter_files) || [];
+  const chapterList = chapterFiles.length
+    ? `<div class="chapter-files">${chapterFiles
+        .map(
+          (f) =>
+            `<a class="dl-item" href="/api/books/${b.id}/download?fmt=chapter&index=${f.index}" title="${esc(Path_basename(f.file))}">
+               <span>${esc(f.title)}</span><small>${formatDuration(f.duration_ms)}</small></a>`
+        )
+        .join("")}</div>`
+    : "";
   const dl = manifest
     ? `<div class="panel"><h3>成品</h3>
-         <p><a class="dl" href="/api/books/${b.id}/download?fmt=mp3">⬇ MP3</a>
+         <p><a class="dl" href="/api/books/${b.id}/download?fmt=mp3">⬇ 整本 MP3</a>
          ${manifest.m4b ? ` · <a class="dl" href="/api/books/${b.id}/download?fmt=m4b">⬇ M4B（带章节）</a>` : ""}
          <span class="muted"> · ${formatDuration(manifest.duration_ms)} · ${manifest.segment_count} 段</span></p>
+         <p class="muted small">输出目录：<code>${esc(manifest.output_dir || "")}</code></p>
+         ${chapterList ? `<h4 class="sub">按章下载</h4>${chapterList}` : ""}
        </div>`
     : "";
 
@@ -149,6 +165,7 @@ function renderDetail() {
       <button id="analyzeBtn">🧠 分析</button>
       <button id="synthBtn">🔊 合成</button>
       <button id="assembleBtn">📦 导出</button>
+      <button class="ghost" id="replanBtn">🔁 重新分段</button>
       <button class="ghost" id="previewBtn">🎧 试听音色</button>
     </div>
 
@@ -208,6 +225,11 @@ function renderDetail() {
   $("#analyzeBtn").onclick = () => startJob("analyze");
   $("#synthBtn").onclick = () => startJob("synthesize");
   $("#assembleBtn").onclick = () => startJob("assemble");
+  $("#replanBtn").onclick = () => {
+    if (confirm("重新分段会清空已完成的分片进度（音频缓存仍保留），确定继续？")) {
+      startJob("plan");
+    }
+  };
   $("#previewBtn").onclick = openPreview;
 
   bindVoiceMode();
@@ -543,6 +565,9 @@ function init() {
   };
   $("#ttsProvider").onchange = renderTtsState;
   $("#llmPreset").onchange = applyLlmPreset;
+  $("#llmFetch").onclick = () => fetchModels("llm", "models");
+  $("#ttsFetch").onclick = () => fetchModels("tts", "models");
+  $("#ttsFetchVoice").onclick = () => fetchModels("tts", "voices");
 
   loadStatus();
   loadBooks();
@@ -580,6 +605,11 @@ async function openSettings() {
     $("#llmModel").value = s.llm.model;
     $("#llmKey").value = "";
 
+    $("#ttsBase").value = s.tts.openai.base_url || "";
+    $("#ttsModel").value = s.tts.openai.model || "";
+    $("#ttsVoice").value = s.tts.openai.voice || "";
+    $("#ttsKey").value = "";
+
     renderTtsState();
     renderLlmState();
   } catch (e) {
@@ -598,6 +628,53 @@ function renderTtsState() {
   const p = settingsCache.tts.providers.find((x) => x.name === name);
   const el = $("#ttsState");
   if (el) el.textContent = p ? `${p.label}：${p.ready ? "可用" : "未就绪"} · ${p.message}` : "";
+  toggleOpenaiBox();
+}
+
+function toggleOpenaiBox() {
+  const box = $("#openaiTtsBox");
+  const sel = $("#ttsProvider");
+  if (!box || !sel) return;
+  box.hidden = sel.value !== "openai";
+}
+
+async function fetchModels(kind, target) {
+  const isLlm = kind === "llm";
+  const base = isLlm ? $("#llmBase").value.trim() : $("#ttsBase").value.trim();
+  const key = isLlm ? $("#llmKey").value.trim() : $("#ttsKey").value.trim();
+  const msg = isLlm ? $("#llmFetchMsg") : $("#ttsFetchMsg");
+  const btn = target === "voices" ? $("#ttsFetchVoice") : isLlm ? $("#llmFetch") : $("#ttsFetch");
+
+  if (btn) btn.disabled = true;
+  if (msg) msg.textContent = "拉取中…";
+  try {
+    const q = new URLSearchParams({ kind, base_url: base, api_key: key });
+    const data = await api(`/api/discover?${q}`);
+    if (!data.ok) {
+      if (msg) msg.textContent = `失败：${data.error || "未知错误"}`;
+      return;
+    }
+    const models = data.models || [];
+    const voices = data.voices || [];
+    const modelList = isLlm ? $("#llmModelList") : $("#ttsModelList");
+    if (modelList) modelList.innerHTML = models.map((m) => `<option value="${esc(m)}">`).join("");
+    if (!isLlm) {
+      const voiceList = $("#ttsVoiceList");
+      if (voiceList) voiceList.innerHTML = voices.map((v) => `<option value="${esc(v)}">`).join("");
+    }
+    if (msg) {
+      const bits = [];
+      if (models.length) bits.push(`${models.length} 个模型`);
+      if (!isLlm && voices.length) bits.push(`${voices.length} 个音色`);
+      msg.textContent = bits.length
+        ? `找到 ${bits.join("、")}，点输入框可下拉选`
+        : "该服务没有返回列表，请手动填写";
+    }
+  } catch (e) {
+    if (msg) msg.textContent = `失败：${e.message}`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 function renderLlmState() {
@@ -632,6 +709,10 @@ async function saveSettings() {
         llm_base_url: $("#llmBase").value.trim(),
         llm_model: $("#llmModel").value.trim(),
         llm_api_key: $("#llmKey").value.trim(),
+        tts_openai_base_url: $("#ttsBase").value.trim(),
+        tts_openai_model: $("#ttsModel").value.trim(),
+        tts_openai_voice: $("#ttsVoice").value.trim(),
+        tts_openai_api_key: $("#ttsKey").value.trim(),
       }),
     });
     settingsCache = s;

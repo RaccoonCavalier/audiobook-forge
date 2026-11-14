@@ -1,4 +1,4 @@
-"""TTS 提供商的协议层测试。
+﻿"""TTS 提供商的协议层测试。
 
 没有真实 key 也能验证：请求体构造、鉴权头/签名、响应解析、错误降级。
 这是"接了但没跑过"和"接了且验证过"的分界线。
@@ -188,3 +188,98 @@ def test_xfyun_speed_multiplier() -> None:
     tts = XfyunTTS(app_id="a", api_password="p")
     speed, _, _ = tts._map_style(TTSRequest(text="x", voice="v", speed=1.4), None)
     assert speed == 70
+
+
+# ------------------------------------------------- OpenAI 兼容 / 本地 TTS
+
+
+def test_openai_tts_request_shape() -> None:
+    from audiobook_forge.tts.openai import OpenAITTS
+
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["body"] = json.loads(request.content)
+        captured["auth"] = request.headers.get("authorization")
+        return httpx.Response(200, content=b"ID3-fake")
+
+    tts = OpenAITTS(
+        base_url="http://local.test:8000/v1",
+        api_key="secret",
+        model="tts-1",
+        voice="alloy",
+        transport=httpx.MockTransport(handler),
+    )
+    result = asyncio.run(tts.synthesize(TTSRequest(text="你好世界", voice="nova")))
+    asyncio.run(tts.aclose())
+
+    assert result.audio == b"ID3-fake"
+    assert result.format == "mp3"
+    assert captured["url"] == "http://local.test:8000/v1/audio/speech"
+    assert captured["body"]["input"] == "你好世界"
+    assert captured["body"]["voice"] == "nova"
+    assert captured["body"]["model"] == "tts-1"
+    assert captured["auth"] == "Bearer secret"
+
+
+def test_openai_tts_downgrades_on_400() -> None:
+    from audiobook_forge.tts.openai import OpenAITTS
+
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        calls.append(body)
+        if len(calls) == 1:
+            return httpx.Response(400, text="unknown field: speed")
+        return httpx.Response(200, content=b"ID3-ok")
+
+    tts = OpenAITTS(
+        base_url="http://local.test/v1",
+        transport=httpx.MockTransport(handler),
+        max_retries=1,
+    )
+    result = asyncio.run(tts.synthesize(TTSRequest(text="测试", voice="alloy")))
+    asyncio.run(tts.aclose())
+
+    assert result.audio == b"ID3-ok"
+    assert "speed" in calls[0]
+    assert "speed" not in calls[1], "400 后应去掉服务不认识的字段"
+
+
+def test_openai_tts_auth_error_not_retried() -> None:
+    from audiobook_forge.tts.openai import OpenAITTS
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, text="bad key")
+
+    tts = OpenAITTS(
+        base_url="http://local.test/v1",
+        transport=httpx.MockTransport(handler),
+        max_retries=3,
+    )
+    with pytest.raises(TTSError) as exc:
+        asyncio.run(tts.synthesize(TTSRequest(text="测试", voice="alloy")))
+    assert exc.value.retryable is False
+
+
+def test_openai_tts_health() -> None:
+    from audiobook_forge.tts.openai import OpenAITTS
+
+    assert OpenAITTS(base_url="").health()[0] is False
+    ok, message = OpenAITTS(base_url="http://127.0.0.1:8000/v1").health()
+    assert ok is True
+    assert "8000" in message
+
+
+# ------------------------------------------------------------ 模型发现
+
+
+def test_discovery_collect_shapes() -> None:
+    from audiobook_forge.discovery import _collect
+
+    assert _collect({"data": [{"id": "a"}, {"id": "b"}]}) == ["a", "b"]
+    assert _collect({"models": ["x", "y"]}) == ["x", "y"]
+    assert _collect({"voices": {"alloy": "default"}}) == ["default"]
+    assert _collect([{"name": "nova"}, "echo"]) == ["nova", "echo"]

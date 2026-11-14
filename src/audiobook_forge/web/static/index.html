@@ -38,12 +38,17 @@
       <label class="field">API 地址
         <input id="llmBase" placeholder="https://api.siliconflow.cn/v1">
       </label>
-      <label class="field">模型
-        <input id="llmModel" placeholder="deepseek-ai/DeepSeek-V3.2">
-      </label>
       <label class="field">API Key
         <input id="llmKey" type="password" placeholder="留空 = 不修改已保存的密钥">
       </label>
+      <div class="field">模型
+        <div class="row-inline">
+          <input id="llmModel" list="llmModelList" placeholder="deepseek-ai/DeepSeek-V3.2">
+          <button class="ghost small" id="llmFetch">拉取模型</button>
+        </div>
+        <datalist id="llmModelList"></datalist>
+        <span class="muted small" id="llmFetchMsg"></span>
+      </div>
       <p class="muted small" id="llmState"></p>
     </section>
 
@@ -53,6 +58,34 @@
         <select id="ttsProvider"></select>
       </label>
       <p class="muted small" id="ttsState"></p>
+
+      <div id="openaiTtsBox" hidden>
+        <p class="muted small">
+          OpenAI 兼容接口（<code>/audio/speech</code>）。本地自建服务同样适用，
+          例如 openedai-speech、Kokoro-FastAPI、LocalAI、GPT-SoVITS-OpenAI-API。
+        </p>
+        <label class="field">API 地址
+          <input id="ttsBase" placeholder="http://127.0.0.1:8000/v1">
+        </label>
+        <label class="field">API Key
+          <input id="ttsKey" type="password" placeholder="本地服务通常留空">
+        </label>
+        <div class="field">模型
+          <div class="row-inline">
+            <input id="ttsModel" list="ttsModelList" placeholder="tts-1">
+            <button class="ghost small" id="ttsFetch">拉取模型</button>
+          </div>
+          <datalist id="ttsModelList"></datalist>
+        </div>
+        <div class="field">音色
+          <div class="row-inline">
+            <input id="ttsVoice" list="ttsVoiceList" placeholder="alloy">
+            <button class="ghost small" id="ttsFetchVoice">拉取音色</button>
+          </div>
+          <datalist id="ttsVoiceList"></datalist>
+        </div>
+        <span class="muted small" id="ttsFetchMsg"></span>
+      </div>
     </section>
 
     <div class="modal-actions">

@@ -283,9 +283,14 @@ class Analyzer:
             return self.settings.tts.mimo.narrator_voice
         if provider == "xfyun":
             return self.settings.tts.xfyun.narrator_voice
+        if provider == "openai":
+            return self.settings.tts.openai.narrator_voice
         return "mock-narrator"
 
     def _pick_voice(self, provider: str, gender: str, index: int) -> str:
+        if provider == "openai":
+            # 兼容服务的音色集合不确定，统一用配置的那一个
+            return self.settings.tts.openai.voice
         pool = VOICE_POOL.get(provider, VOICE_POOL["mock"])
         if gender in {"male", "female", "child"}:
             voices = pool[gender]

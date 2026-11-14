@@ -101,14 +101,32 @@ class XfyunSettings:
 
 
 @dataclass(slots=True)
+class OpenAITtsSettings:
+    """OpenAI 兼容的语音合成（/v1/audio/speech）。
+
+    openedai-speech、Kokoro-FastAPI、LocalAI、GPT-SoVITS-OpenAI-API 这类
+    本地服务都实现了同一套协议，填个地址就能用。
+    """
+
+    base_url: str = "http://127.0.0.1:8000/v1"
+    api_key: str = ""
+    model: str = "tts-1"
+    voice: str = "alloy"
+    narrator_voice: str = "alloy"
+    audio_format: str = "mp3"
+    speed: float = 1.0
+
+
+@dataclass(slots=True)
 class TTSSettings:
-    provider: str = "mock"          # mock | mimo | xfyun
+    provider: str = "mock"          # mock | mimo | xfyun | openai
     concurrency: int = 4
     retries: int = 3
     bitrate: str = "64k"
     sample_rate: int = 44100
     mimo: MimoSettings = field(default_factory=MimoSettings)
     xfyun: XfyunSettings = field(default_factory=XfyunSettings)
+    openai: OpenAITtsSettings = field(default_factory=OpenAITtsSettings)
 
     def voice_for(self, provider: str, gender: str = "unknown") -> str:
         """按性别给一个后备音色（LLM 不可用时的规则兜底）。"""
@@ -119,6 +137,9 @@ class TTSSettings:
         chosen = table.get(gender, female)
         if provider == "mimo":
             return self.mimo.default_voice if gender == "unknown" else chosen["mimo"]
+        if provider == "openai":
+            # 本地/兼容服务的音色集合不确定，统一用配置的那一个
+            return self.openai.voice
         if provider == "xfyun":
             return self.xfyun.voice if gender == "unknown" else chosen["xfyun"]
         return chosen["mock"]
@@ -127,6 +148,7 @@ class TTSSettings:
 @dataclass(slots=True)
 class Settings:
     data_dir: Path
+    output_dir: Path
     host: str
     port: int
     llm: LLMSettings
@@ -163,8 +185,9 @@ class Settings:
         return self.tts.bitrate
 
     def ensure_dirs(self) -> None:
-        for path in (self.data_dir, self.books_dir, self.uploads_dir, self.cache_dir):
+        for path in (self.data_dir, self.books_dir, self.uploads_dir, self.cache_dir, self.output_dir):
             path.mkdir(parents=True, exist_ok=True)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
 
 def load_settings(env_file: str | Path | None = None) -> Settings:
@@ -172,9 +195,15 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
     load_dotenv(env_path)
 
     data_dir = Path(_str("ABF_DATA_DIR", "./data")).expanduser().resolve()
+    # 成品输出目录，默认 data/output；Docker 里挂一个卷到这里即可
+    raw_output = _str("ABF_OUTPUT_DIR", "")
+    output_dir = (
+        Path(raw_output).expanduser().resolve() if raw_output else data_dir / "output"
+    )
 
     settings = Settings(
         data_dir=data_dir,
+        output_dir=output_dir,
         host=_str("ABF_HOST", "127.0.0.1"),
         port=_int("ABF_PORT", 8848),
         llm=LLMSettings(
@@ -212,6 +241,15 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
                 pitch=_int("ABF_XFYUN_PITCH", 50),
                 oral_level=_str("ABF_XFYUN_ORAL_LEVEL", "mid"),
             ),
+            openai=OpenAITtsSettings(
+                base_url=_str("ABF_OPENAI_TTS_BASE_URL", "http://127.0.0.1:8000/v1"),
+                api_key=_str("ABF_OPENAI_TTS_API_KEY", ""),
+                model=_str("ABF_OPENAI_TTS_MODEL", "tts-1"),
+                voice=_str("ABF_OPENAI_TTS_VOICE", "alloy"),
+                narrator_voice=_str("ABF_OPENAI_TTS_NARRATOR_VOICE", "alloy"),
+                audio_format=_str("ABF_OPENAI_TTS_FORMAT", "mp3"),
+                speed=_float("ABF_OPENAI_TTS_SPEED", 1.0),
+            ),
         ),
         segment_min_chars=_int("ABF_SEGMENT_MIN_CHARS", 12),
         segment_max_chars=_int("ABF_SEGMENT_MAX_CHARS", 120),
@@ -246,8 +284,19 @@ def apply_runtime_overrides(settings: Settings) -> None:
 
     tts = data.get("tts") or {}
     provider = str(tts.get("provider") or "").lower()
-    if provider in {"mock", "mimo", "xfyun"}:
+    if provider in {"mock", "mimo", "xfyun", "openai"}:
         settings.tts.provider = provider
+
+    oai = tts.get("openai") or {}
+    if isinstance(oai.get("base_url"), str) and oai["base_url"].strip():
+        settings.tts.openai.base_url = oai["base_url"].strip()
+    if isinstance(oai.get("model"), str) and oai["model"].strip():
+        settings.tts.openai.model = oai["model"].strip()
+    if isinstance(oai.get("voice"), str) and oai["voice"].strip():
+        settings.tts.openai.voice = oai["voice"].strip()
+        settings.tts.openai.narrator_voice = oai["voice"].strip()
+    if isinstance(oai.get("api_key"), str) and oai["api_key"].strip():
+        settings.tts.openai.api_key = oai["api_key"].strip()
 
     llm = data.get("llm") or {}
     if "enabled" in llm:
@@ -263,7 +312,15 @@ def apply_runtime_overrides(settings: Settings) -> None:
 def save_runtime_overrides(settings: Settings) -> Path:
     """原子写入运行时配置。密钥只落在 data/ 下，不进仓库。"""
     payload = {
-        "tts": {"provider": settings.tts.provider},
+        "tts": {
+            "provider": settings.tts.provider,
+            "openai": {
+                "base_url": settings.tts.openai.base_url,
+                "api_key": settings.tts.openai.api_key,
+                "model": settings.tts.openai.model,
+                "voice": settings.tts.openai.voice,
+            },
+        },
         "llm": {
             "enabled": settings.llm.enabled,
             "base_url": settings.llm.base_url,

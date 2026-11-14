@@ -132,6 +132,11 @@ button.small { padding: 3px 9px; font-size: 12px; }
 .modal-section .row { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 8px 0; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .modal .small { font-size: 11px; }
+.modal .row-inline { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+.modal .row-inline input { flex: 1; }
+.modal .row-inline button { white-space: nowrap; }
+.modal .muted.small { display: block; margin-top: 4px; }
+.modal code { background: var(--bg); padding: 1px 5px; border-radius: 4px; font-size: 11px; }
 
 /* ---------------- 单声线 ---------------- */
 .voice-mode { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
@@ -141,6 +146,16 @@ button.small { padding: 3px 9px; font-size: 12px; }
 .voice-pick { display: inline-flex; align-items: center; gap: 8px; }
 .voice-pick select { background: var(--panel); border: 1px solid var(--border);
   border-radius: 6px; color: var(--text); padding: 4px 8px; font-size: 12px; }
+
+/* ---------------- 按章下载 ---------------- */
+h4.sub { margin: 12px 0 0; font-size: 12px; color: var(--muted); font-weight: 600; }
+.chapter-files { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 6px; margin-top: 8px; }
+.dl-item { display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px;
+  text-decoration: none; color: var(--text); font-size: 12px; }
+.dl-item:hover { border-color: var(--accent, #6ea8fe); }
+.dl-item small { color: var(--muted); white-space: nowrap; }
 
 .panel { margin-top: 22px; }
 .panel h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin: 0 0 10px; }

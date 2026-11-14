@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import shutil
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import unquote
 
 from fastapi import FastAPI, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -20,6 +22,7 @@ from starlette.concurrency import run_in_threadpool
 from .. import __version__
 from ..config import Settings, load_settings, save_runtime_overrides
 from ..db import Database
+from ..discovery import discover
 from ..ingest import SUPPORTED, detect_format
 from ..models import Job, JobStatus, SegmentStatus
 from ..pipeline.runner import Pipeline, RunOptions, cleanup_book
@@ -33,12 +36,39 @@ MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 TASKS: dict[str, asyncio.Task] = {}
 
 
+_UNSAFE_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _repair_filename(name: str) -> str:
+    """修掉两种常见文件名编码问题：百分号转义、UTF-8 被当成 latin-1。"""
+    name = unquote(name or "")
+    if re.search(r"[\u00c0-\u00ff]", name):
+        try:
+            name = name.encode("latin-1").decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            pass
+    return name
+
+
+def _safe_stem(name: str) -> str:
+    """取一个可做文件名的书名，保留中文，去掉路径和非法字符。"""
+    name = _repair_filename(name).replace("\\", "/").rsplit("/", 1)[-1]
+    stem = _UNSAFE_NAME.sub("_", Path(name).stem)
+    stem = re.sub(r"\s+", " ", stem).strip(" .")
+    return stem[:80] or "book"
+
+
 class SettingsUpdate(BaseModel):
     tts_provider: str | None = None
     llm_enabled: bool | None = None
     llm_base_url: str | None = None
     llm_model: str | None = None
     llm_api_key: str | None = None
+    # OpenAI 兼容 / 本地 TTS
+    tts_openai_base_url: str | None = None
+    tts_openai_model: str | None = None
+    tts_openai_voice: str | None = None
+    tts_openai_api_key: str | None = None
 
 
 class RunRequest(BaseModel):
@@ -92,7 +122,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/status")
     async def status() -> dict:
         providers = {}
-        for name in ("mock", "mimo", "xfyun"):
+        for name in ("mock", "mimo", "xfyun", "openai"):
             try:
                 tts = create_tts(settings, name)
                 ok, message = tts.health()
@@ -142,7 +172,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     def _provider_status() -> list[dict]:
         out = []
-        for name in ("mock", "mimo", "xfyun"):
+        for name in ("mock", "mimo", "xfyun", "openai"):
             try:
                 ok, message = create_tts(settings, name).health()
             except Exception as exc:  # noqa: BLE001
@@ -163,6 +193,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "provider": settings.tts.provider,
                 "concurrency": settings.tts.concurrency,
                 "providers": _provider_status(),
+                "openai": {
+                    "base_url": settings.tts.openai.base_url,
+                    "model": settings.tts.openai.model,
+                    "voice": settings.tts.openai.voice,
+                    "has_key": bool(settings.tts.openai.api_key),
+                },
             },
             "llm": {
                 "enabled": settings.llm.enabled,
@@ -182,7 +218,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/settings")
     async def update_settings(req: SettingsUpdate) -> dict:
         if req.tts_provider is not None:
-            if req.tts_provider not in {"mock", "mimo", "xfyun"}:
+            if req.tts_provider not in {"mock", "mimo", "xfyun", "openai"}:
                 raise HTTPException(400, "未知的 TTS 提供商")
             settings.tts.provider = req.tts_provider
 
@@ -196,21 +232,58 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if req.llm_api_key is not None and req.llm_api_key.strip():
             settings.llm.api_key = req.llm_api_key.strip()
 
+        if req.tts_openai_base_url is not None and req.tts_openai_base_url.strip():
+            settings.tts.openai.base_url = req.tts_openai_base_url.strip()
+        if req.tts_openai_model is not None and req.tts_openai_model.strip():
+            settings.tts.openai.model = req.tts_openai_model.strip()
+        if req.tts_openai_voice is not None and req.tts_openai_voice.strip():
+            settings.tts.openai.voice = req.tts_openai_voice.strip()
+            settings.tts.openai.narrator_voice = req.tts_openai_voice.strip()
+        if req.tts_openai_api_key is not None and req.tts_openai_api_key.strip():
+            settings.tts.openai.api_key = req.tts_openai_api_key.strip()
+
         path = save_runtime_overrides(settings)
         log.info("设置已更新，写入 %s", path)
         return _settings_payload()
+
+    @app.get("/api/discover")
+    async def discover_models(
+        kind: str = "llm", base_url: str = "", api_key: str = ""
+    ) -> dict:
+        """拉取 OpenAI 兼容服务的模型（TTS 还会尝试拉音色）。"""
+        if kind not in {"llm", "tts"}:
+            raise HTTPException(400, "kind 只能是 llm 或 tts")
+
+        # 没传地址/密钥就用已保存的配置
+        if not base_url.strip():
+            base_url = (
+                settings.llm.base_url if kind == "llm" else settings.tts.openai.base_url
+            )
+        if not api_key.strip():
+            api_key = (
+                settings.llm.api_key if kind == "llm" else settings.tts.openai.api_key
+            )
+
+        try:
+            result = await discover(kind, base_url.strip(), api_key.strip())
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:300], "base_url": base_url}
+
+        return {"ok": True, "base_url": base_url, **result}
 
     # ------------------------------------------------------------ 书本管理
 
     @app.post("/api/books")
     async def upload(file: UploadFile) -> dict:
-        suffix = Path(file.filename or "").suffix.lower()
+        original = file.filename or "book.txt"
+        suffix = Path(_repair_filename(original)).suffix.lower()
         if suffix not in SUPPORTED:
             raise HTTPException(400, f"不支持的文件类型：{suffix or '未知'}（支持 {', '.join(SUPPORTED)}）")
 
-        upload_dir = settings.uploads_dir
-        upload_dir.mkdir(parents=True, exist_ok=True)
-        temp = upload_dir / f"{uuid.uuid4().hex}{suffix}"
+        # 用原标题建子目录存放，解析器会把文件名当书名，避免书名变成一串哈希
+        folder = settings.uploads_dir / uuid.uuid4().hex
+        folder.mkdir(parents=True, exist_ok=True)
+        temp = folder / f"{_safe_stem(original)}{suffix}"
 
         size = 0
         with temp.open("wb") as out:
@@ -448,18 +521,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return FileResponse(items[0].audio_path, media_type="audio/mpeg")
 
     @app.get("/api/books/{book_id}/download")
-    async def download(book_id: str, fmt: str = "mp3") -> FileResponse:
+    async def download(
+        book_id: str, fmt: str = "mp3", index: int | None = None
+    ) -> FileResponse:
         manifest = pipeline.manifest(book_id)
         if not manifest:
             raise HTTPException(404, "还没有可下载的成品")
-        path = manifest.get("m4b") if fmt == "m4b" else manifest.get("mp3")
+
+        if fmt == "chapter":
+            files = manifest.get("chapter_files") or []
+            hit = next((f for f in files if f.get("index") == index), None)
+            if hit is None:
+                raise HTTPException(404, "没有这一章的音频")
+            path = hit.get("file")
+            media_type = "audio/mpeg"
+        else:
+            path = manifest.get("m4b") if fmt == "m4b" else manifest.get("mp3")
+            media_type = "audio/mp4" if fmt == "m4b" else "audio/mpeg"
+
         if not path or not Path(path).is_file():
             raise HTTPException(404, "该格式不存在")
-        return FileResponse(
-            path,
-            media_type="audio/mp4" if fmt == "m4b" else "audio/mpeg",
-            filename=Path(path).name,
-        )
+        return FileResponse(path, media_type=media_type, filename=Path(path).name)
 
     @app.get("/api/books/{book_id}/cast")
     async def get_cast(book_id: str) -> dict:

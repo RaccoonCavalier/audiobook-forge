@@ -21,7 +21,7 @@ from ..llm.openai_compat import OpenAICompatLLM
 from ..models import Book, Cast, Job, JobStatus, SegmentStatus
 from ..tts.base import BaseTTS
 from ..tts.registry import create_tts
-from .assemble import assemble
+from .assemble import _safe_name, assemble
 from .planner import build_segments
 from .synthesize import SynthStats, Synthesizer
 
@@ -62,7 +62,13 @@ class Pipeline:
         return self.book_dir(book_id) / "audio"
 
     def out_dir(self, book_id: str) -> Path:
-        return self.book_dir(book_id) / "out"
+        """成品目录：output_dir/<书名>，Docker 里把 output_dir 挂出来即可直接浏览。"""
+        name = ""
+        try:
+            name = _safe_name(self.load_book(book_id).title)
+        except Exception:  # noqa: BLE001
+            name = ""
+        return self.settings.output_dir / (name or book_id)
 
     def plan_file(self, book_id: str) -> Path:
         return self.book_dir(book_id) / "plan.json"
@@ -104,10 +110,12 @@ class Pipeline:
         path.write_text(cast.model_dump_json(indent=2), encoding="utf-8")
 
     def manifest(self, book_id: str) -> dict | None:
-        path = self.out_dir(book_id) / "manifest.json"
-        if not path.is_file():
-            return None
-        return json.loads(path.read_text(encoding="utf-8"))
+        # 兼容旧版本把成品放在 books/<id>/out 下的布局
+        for base in (self.out_dir(book_id), self.book_dir(book_id) / "out"):
+            path = base / "manifest.json"
+            if path.is_file():
+                return json.loads(path.read_text(encoding="utf-8"))
+        return None
 
     # ------------------------------------------------------------------ 步骤
 
@@ -183,21 +191,26 @@ class Pipeline:
         scope = f"所选 {len(options.chapters)} 章" if options.chapters else "全书"
 
         # 声线模式/标题朗读等设置变了，旧分段就作废，需要重新生成
-        if self.db.segments_for_book(book_id):
-            stored: dict = {}
+        existing = self.db.segments_for_book(book_id)
+        if existing:
             sig_file = self.plan_file(book_id)
-            if sig_file.is_file():
+            wanted = self._plan_signature(options)
+            if not sig_file.is_file():
+                # 旧版本没有签名：按现有分段继续，别把用户已合成的进度洗掉
+                sig_file.write_text(
+                    json.dumps(wanted, ensure_ascii=False), encoding="utf-8"
+                )
+            else:
                 try:
                     stored = json.loads(sig_file.read_text(encoding="utf-8"))
                 except ValueError:
                     stored = {}
-            wanted = self._plan_signature(options)
-            if stored != wanted:
-                cast = self.load_cast(book_id)
-                if cast is not None:
-                    self.plan(book, cast, options)
-                    mode = "单声线" if options.single_voice else "多角色"
-                    await _emit(progress, "合成", 0, 0, f"声线设置已变，按{mode}重新分段")
+                if stored != wanted:
+                    cast = self.load_cast(book_id)
+                    if cast is not None:
+                        self.plan(book, cast, options)
+                        mode = "单声线" if options.single_voice else "多角色"
+                        await _emit(progress, "合成", 0, 0, f"声线设置已变，按{mode}重新分段")
 
         pending = self.db.pending_segments(book_id, options.chapters)
         if not pending:

@@ -158,8 +158,14 @@ def test_settings_roundtrip(client: TestClient, tmp_path: Path) -> None:
     assert res.status_code == 200
     body = res.json()
     assert body["tts"]["provider"] == "mock"
-    assert {p["name"] for p in body["tts"]["providers"]} == {"mock", "mimo", "xfyun"}
+    assert {p["name"] for p in body["tts"]["providers"]} == {
+        "mock",
+        "mimo",
+        "xfyun",
+        "openai",
+    }
     assert "api_key" not in body["llm"], "接口不能回传密钥"
+    assert "api_key" not in body["tts"]["openai"], "接口不能回传密钥"
 
     upd = client.post(
         "/api/settings",
@@ -193,7 +199,45 @@ def test_settings_roundtrip(client: TestClient, tmp_path: Path) -> None:
 
 def test_settings_rejects_unknown_provider(client: TestClient) -> None:
     res = client.post("/api/settings", json={"tts_provider": "openai"})
-    assert res.status_code == 400
+    assert res.status_code == 200
+    assert res.json()["tts"]["provider"] == "openai"
+
+    bad = client.post("/api/settings", json={"tts_provider": "nope"})
+    assert bad.status_code == 400
+
+
+def test_upload_filename_becomes_title(client: TestClient, tmp_path: Path) -> None:
+    """以前会拿 UUID 临时名当书名，现在必须用原文件名。"""
+    path = tmp_path / "剑来.txt"
+    path.write_text(
+        "第一章 初入江湖\n\n少年背着剑走下山。\n\n第二章 风雪夜\n\n客栈里灯火通明。",
+        encoding="utf-8",
+    )
+    with path.open("rb") as fh:
+        res = client.post(
+            "/api/books", files={"file": ("剑来.txt", fh, "text/plain")}
+        )
+    assert res.status_code == 200, res.text
+    assert res.json()["title"] == "剑来"
+
+
+def test_safe_stem_repairs_paths_and_escapes() -> None:
+    from audiobook_forge.web.app import _safe_stem
+
+    assert _safe_stem(r"C:\fake\dir\剑来.txt") == "剑来"
+    assert _safe_stem("%E5%89%91%E6%9D%A5.txt") == "剑来"
+    assert _safe_stem("../../etc/passwd.txt") == "passwd"
+    assert _safe_stem("") == "book"
+
+
+def test_discover_reports_error_instead_of_500(client: TestClient) -> None:
+    res = client.get(
+        "/api/discover?kind=llm&base_url=http://127.0.0.1:9/v1&api_key=x"
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is False
+    assert body["error"]
 
 
 def test_runtime_overrides_beat_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

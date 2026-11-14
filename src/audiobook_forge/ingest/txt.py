@@ -65,6 +65,9 @@ def _guess_title(path: Path, chapters: list[Chapter]) -> str:
     stem = path.stem
     # 去掉常见的下载站后缀
     stem = re.sub(r"[（(\[【].*?[)）\]】]", "", stem).strip()
+    # 只剩一串哈希（历史上传命名遗留）时不要当书名
+    if re.fullmatch(r"[0-9a-fA-F]{16,}", stem):
+        return "未命名"
     return stem or "未命名"
 
 

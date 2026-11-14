@@ -109,6 +109,7 @@ abf build 我的小说.epub --provider mimo
 | `mock` | 无 | 本地合成正弦波，用于跑通流程、写测试 |
 | `mimo` | `ABF_MIMO_API_KEY` | 小米 MiMo TTS，支持自然语言风格、方言、角色扮演；当前限时免费 |
 | `xfyun` | `ABF_XFYUN_APP_ID` + 密码或密钥对 | 讯飞超拟人合成，发音人极多（`x6_*` 系列） |
+| `openai` | `ABF_OPENAI_TTS_BASE_URL` | OpenAI 兼容协议（`/audio/speech`），**适合本地自建**：openedai-speech、Kokoro-FastAPI、LocalAI、GPT-SoVITS-OpenAI-API 等 |
 
 ### LLM
 
@@ -129,6 +130,36 @@ ABF_LLM_MODEL=deepseek-ai/DeepSeek-V3.2
 ```
 
 不配也能跑（`ABF_LLM_ENABLED=false`），但会退化成纯正则分拣：只能认出"张三说道"这种标准句式，复杂对话会标成"未知角色"，朗读指令也基本为空。
+
+### 选模型：填地址和密钥，然后自动拉列表
+
+设置面板里的「拉取模型」会请求 `{API 地址}/models` 并把返回的模型名填进下拉候选，选一个保存即可。TTS 那边同理，还会额外尝试 `/audio/voices`、`/voices` 拉音色列表。服务不支持这些端点时，直接手动输入模型名也能用。
+
+---
+
+## 输出与命名
+
+成品统一写到一个可配置的目录（`ABF_OUTPUT_DIR`，默认 `data/output`），每本书一个子目录：
+
+```
+data/output/江湖夜雨/
+├── 江湖夜雨.mp3                    整本
+├── 江湖夜雨.m4b                    带章节标记
+├── 江湖夜雨-第01章-雨夜.mp3        每章一个文件
+├── 江湖夜雨-第02章-雨夜.mp3
+└── manifest.json                   时长、章节起止、文件清单
+```
+
+每章的命名规则是 `书名-第NN章-章节名`；前言、序章、番外这类不带章号的章节，直接 `书名-前言.mp3`。
+
+Docker 里把 `output` 挂出来即可在宿主机直接看到这些文件：
+
+```yaml
+environment:
+  ABF_OUTPUT_DIR: /output
+volumes:
+  - ./output:/output
+```
 
 ---
 

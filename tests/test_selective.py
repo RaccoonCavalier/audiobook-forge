@@ -160,6 +160,22 @@ def test_voice_mode_signature_prevents_replan(env, sample_txt: Path) -> None:
     assert [s.seq for s in db.segments_for_book(book.id)] == seq_before
 
 
+def test_missing_plan_signature_keeps_progress(env, sample_txt: Path) -> None:
+    """旧版本没有 plan.json 时，不能把已完成的分片当成"设置变了"而重排。"""
+    book, _ = _prepared(env, sample_txt)
+    settings, db, pipeline = env
+
+    asyncio.run(pipeline.synthesize(book.id, RunOptions()))
+    assert db.segment_stats(book.id)["done"] > 0
+
+    pipeline.plan_file(book.id).unlink()  # 模拟老数据
+    stats = asyncio.run(pipeline.synthesize(book.id, RunOptions()))
+
+    assert stats.total == 0, "不该重新生成待合成分片"
+    assert db.segment_stats(book.id)["pending"] == 0
+    assert pipeline.plan_file(book.id).is_file(), "应该补写签名"
+
+
 def test_cancel_keeps_finished_segments(env, sample_txt: Path, monkeypatch) -> None:
     book, total = _prepared(env, sample_txt)
     _, db, pipeline = env
