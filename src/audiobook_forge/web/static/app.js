@@ -88,6 +88,7 @@ function renderShelf() {
 /* ---------------------------------------------------------------- 详情 */
 
 async function openBook(id) {
+  clearInterval(state.pollTimer);
   state.current = id;
   state.segOffset = 0;
   renderShelf();
@@ -163,12 +164,28 @@ function renderDetail() {
     ${dl}
 
     <div class="panel">
-      <h3>章节</h3>
+      <h3>章节 <span class="muted" id="chSelInfo"></span></h3>
+      <div class="chapter-tools">
+        <button class="ghost small" id="selAll">全选</button>
+        <button class="ghost small" id="selNone">清空</button>
+        <button class="ghost small" id="selUndone">只选未合成</button>
+        <button class="small primary" id="synthSel">合成选中章节</button>
+      </div>
       <div class="scroll"><table>
-        <thead><tr><th>#</th><th>标题</th><th>段落</th><th>对白</th><th>字数</th></tr></thead>
+        <thead><tr>
+          <th style="width:30px"><input type="checkbox" id="selAllBox"></th>
+          <th>#</th><th>标题</th><th>段落</th><th>对白</th><th>字数</th><th>已合成</th>
+        </tr></thead>
         <tbody>${d.chapters
-          .map((c) => `<tr><td>${c.index + 1}</td><td>${esc(c.title)}</td><td>${c.blocks}</td>
-             <td>${c.dialogues ? `<span class="pill dialogue">${c.dialogues}</span>` : "—"}</td><td>${c.chars}</td></tr>`)
+          .map((c) => `<tr>
+            <td><input type="checkbox" class="chk" data-idx="${c.index}"></td>
+            <td>${c.index + 1}</td>
+            <td>${esc(c.title)}</td>
+            <td>${c.blocks}</td>
+            <td>${c.dialogues ? `<span class="pill dialogue">${c.dialogues}</span>` : "—"}</td>
+            <td>${c.chars}</td>
+            <td>${c.seg_total ? `<span class="pill ${c.seg_done >= c.seg_total ? "done" : "pending"}">${c.seg_done}/${c.seg_total}</span>` : "—"}</td>
+          </tr>`)
           .join("")}</tbody>
       </table></div>
     </div>
@@ -183,7 +200,52 @@ function renderDetail() {
   $("#assembleBtn").onclick = () => startJob("assemble");
   $("#previewBtn").onclick = openPreview;
 
+  bindChapterSelection(d);
   loadSegments();
+}
+
+function bindChapterSelection(detail) {
+  const boxes = () => Array.from(document.querySelectorAll(".chk"));
+  const selected = () => boxes().filter((b) => b.checked).map((b) => Number(b.dataset.idx));
+
+  const info = $("#chSelInfo");
+  const refresh = () => {
+    const n = selected().length;
+    if (info) info.textContent = n ? `已选 ${n} 章` : "未选章节（默认合成全书）";
+    const all = $("#selAllBox");
+    if (all) all.checked = n > 0 && n === boxes().length;
+  };
+
+  boxes().forEach((b) => (b.onchange = refresh));
+
+  const allBox = $("#selAllBox");
+  if (allBox) allBox.onchange = (e) => {
+    boxes().forEach((b) => (b.checked = e.target.checked));
+    refresh();
+  };
+  const on = (id, fn) => {
+    const node = $(id);
+    if (node) node.onclick = fn;
+  };
+  on("#selAll", () => { boxes().forEach((b) => (b.checked = true)); refresh(); });
+  on("#selNone", () => { boxes().forEach((b) => (b.checked = false)); refresh(); });
+  on("#selUndone", () => {
+    (detail.chapters || []).forEach((c) => {
+      const box = document.querySelector(`.chk[data-idx="${c.index}"]`);
+      if (box) box.checked = !c.seg_total || c.seg_done < c.seg_total;
+    });
+    refresh();
+  });
+  on("#synthSel", () => {
+    const chapters = selected();
+    if (!chapters.length) {
+      toast("先勾选要合成的章节", true);
+      return;
+    }
+    startJob("synthesize", chapters);
+  });
+
+  refresh();
 }
 
 function formatDuration(ms) {
@@ -196,18 +258,19 @@ function formatDuration(ms) {
 
 /* ---------------------------------------------------------------- 任务 */
 
-async function startJob(action) {
+async function startJob(action, chapters) {
   const id = state.current;
   if (!id) return;
-  const buttons = document.querySelectorAll(".actions button");
+  const buttons = document.querySelectorAll(".actions button, .chapter-tools button");
   buttons.forEach((b) => (b.disabled = true));
   try {
     const res = await api(`/api/books/${id}/${action}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
+      body: JSON.stringify(chapters && chapters.length ? { chapters } : {}),
     });
-    toast(actionLabel(action) + " 已开始");
+    const label = actionLabel(action) + (chapters && chapters.length ? `（${chapters.length} 章）` : "");
+    toast(label + " 已开始");
     pollJob(res.job_id);
   } catch (e) {
     toast(e.message, true);
@@ -226,8 +289,27 @@ function pollJob(jobId) {
     area.innerHTML = `
       <div class="progress-wrap">
         <div class="progress"><i id="bar"></i></div>
-        <div class="progress-label"><span id="jobStage">排队中…</span><span id="jobCount"></span></div>
+        <div class="progress-label">
+          <span id="jobStage">排队中…</span>
+          <span class="progress-right"><span id="jobCount"></span>
+            <button class="ghost small" id="cancelJobBtn">中止</button></span>
+        </div>
       </div>`;
+    const btn = $("#cancelJobBtn");
+    if (btn) {
+      btn.onclick = async () => {
+        btn.disabled = true;
+        btn.textContent = "中止中…";
+        try {
+          await api(`/api/jobs/${jobId}/cancel`, { method: "POST" });
+          toast("已发送中止请求，正在收尾");
+        } catch (e) {
+          toast(e.message, true);
+          btn.disabled = false;
+          btn.textContent = "中止";
+        }
+      };
+    }
   }
 
   state.pollTimer = setInterval(async () => {
@@ -248,7 +330,13 @@ function pollJob(jobId) {
 
     if (["done", "failed", "cancelled"].includes(job.status)) {
       clearInterval(state.pollTimer);
-      toast(job.status === "done" ? "任务完成" : `任务结束：${job.message || job.status}`, job.status !== "done");
+      const msg =
+        job.status === "done"
+          ? "任务完成"
+          : job.status === "cancelled"
+            ? "已中止（已完成的分片保留，可随时续跑）"
+            : `任务结束：${job.message || job.status}`;
+      toast(msg, job.status !== "done");
       await loadBooks();
       await openBook(state.current);
     }

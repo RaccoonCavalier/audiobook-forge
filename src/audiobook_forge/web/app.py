@@ -39,6 +39,8 @@ class RunRequest(BaseModel):
     make_m4b: bool = True
     skip_llm: bool = False
     force_reanalyze: bool = False
+    # 只合成这些章节（0 基下标）；不传 = 全书
+    chapters: list[int] | None = None
 
 
 class PreviewRequest(BaseModel):
@@ -160,6 +162,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         cast = pipeline.load_cast(book_id)
         stats = db.segment_stats(book_id)
         job = db.latest_job_for_book(book_id)
+        chapter_stats = db.chapter_segment_stats(book_id)
 
         return {
             "book": {
@@ -177,6 +180,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "blocks": len(c.blocks),
                     "chars": c.char_count,
                     "dialogues": sum(1 for b in c.blocks if b.type == "dialogue"),
+                    # 该章已合成 / 总数，界面用它显示进度并支持按需勾选
+                    "seg_done": chapter_stats.get(c.index, {}).get("done", 0),
+                    "seg_total": chapter_stats.get(c.index, {}).get("total", 0),
                 }
                 for c in book.chapters
             ],
@@ -230,6 +236,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             make_m4b=req.make_m4b,
             skip_llm=req.skip_llm,
             force_reanalyze=req.force_reanalyze,
+            chapters=list(req.chapters) if req.chapters else None,
         )
 
     def _start(book_id: str, action: str, req: RunRequest) -> str:
@@ -253,6 +260,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await pipeline.analyze(job.book_id, options, progress)
                 db.update_job(job.id, status=JobStatus.done, stage="done", message="分析完成")
             elif action == "synthesize":
+                # 单独点「合成」时可能还没生成分段，先补上规划
+                if not db.segments_for_book(job.book_id):
+                    book = pipeline.load_book(job.book_id)
+                    cast = pipeline.load_cast(job.book_id)
+                    if cast is None:
+                        raise ValueError("还没有角色表，请先分析（或直接点「一键生成」）")
+                    await run_in_threadpool(pipeline.plan, book, cast, options)
+
                 stats = await pipeline.synthesize(job.book_id, options, progress)
                 db.update_job(
                     job.id,
@@ -310,14 +325,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/jobs/{job_id}/cancel")
     async def cancel_job(job_id: str) -> dict:
-        task = TASKS.get(job_id)
-        if task:
-            task.cancel()
-            return {"ok": True}
         job = db.get_job(job_id)
-        if job:
-            db.update_job(job_id, status=JobStatus.cancelled, message="已取消")
-        return {"ok": True}
+        if job is None:
+            raise HTTPException(404, "任务不存在")
+        if job.status in {JobStatus.done, JobStatus.failed, JobStatus.cancelled}:
+            return {"ok": True, "status": job.status.value, "already_finished": True}
+
+        task = TASKS.get(job_id)
+        if task is not None and not task.done():
+            # 取消信号会让 asyncio.gather 中止后续请求；
+            # 已经在跑的 ffmpeg 线程会自然结束，不阻塞前端
+            task.cancel()
+            return {"ok": True, "status": "cancelling"}
+
+        db.update_job(job_id, status=JobStatus.cancelled, message="已中止")
+        return {"ok": True, "status": "cancelled"}
 
     # ------------------------------------------------------------ 音频访问
 

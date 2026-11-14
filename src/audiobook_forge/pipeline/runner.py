@@ -37,6 +37,8 @@ class RunOptions:
     make_m4b: bool = True
     skip_llm: bool = False
     force_reanalyze: bool = False
+    # 只合成指定章节（0 基下标）。None / 空列表 = 全书
+    chapters: list[int] | None = None
 
 
 class Pipeline:
@@ -153,10 +155,11 @@ class Pipeline:
         progress: ProgressFn | None = None,
     ) -> SynthStats:
         book = self.load_book(book_id)
-        pending = self.db.pending_segments(book_id)
+        scope = f"所选 {len(options.chapters)} 章" if options.chapters else "全书"
+        pending = self.db.pending_segments(book_id, options.chapters)
         if not pending:
             stats = SynthStats(total=0)
-            await _emit(progress, "合成", 0, 0, "所有分片已就绪")
+            await _emit(progress, "合成", 0, 0, f"{scope}的分片都已就绪")
             return stats
 
         tts = create_tts(self.settings, options.provider)
@@ -187,7 +190,11 @@ class Pipeline:
         try:
             stats = await synthesizer.run(pending, on_segment)
         finally:
-            await tts.aclose()
+            # 取消时这里也可能被 CancelledError 打断，不能让它盖掉取消信号
+            try:
+                await tts.aclose()
+            except Exception:  # noqa: BLE001
+                log.debug("关闭 TTS 客户端时出错，忽略", exc_info=True)
         return stats
 
     def assemble_now(self, book_id: str, options: RunOptions) -> dict:

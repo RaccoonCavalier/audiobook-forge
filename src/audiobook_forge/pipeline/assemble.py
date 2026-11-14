@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 from ..config import Settings
@@ -66,14 +67,17 @@ def assemble(
 
     slug = _safe_name(book.title)
     mp3_path = out_dir / f"{slug}.mp3"
+    # 先写临时文件再原子替换：中途取消或崩溃都不会留下半截损坏的成品
+    mp3_tmp = out_dir / f".{slug}.part.mp3"
     audio_utils.concat(
         entries,
-        mp3_path,
+        mp3_tmp,
         ffmpeg=settings.ffmpeg,
         sample_rate=settings.audio_sample_rate,
         bitrate=settings.audio_bitrate,
         gap_dir=out_dir / "_gaps",
     )
+    os.replace(mp3_tmp, mp3_path)
 
     total_ms = audio_utils.probe_duration_ms(mp3_path, settings.ffmpeg)
 
@@ -81,15 +85,17 @@ def assemble(
     if make_m4b:
         try:
             m4b_path = out_dir / f"{slug}.m4b"
+            m4b_tmp = out_dir / f".{slug}.part.m4b"
             audio_utils.to_m4b(
                 mp3_path,
-                m4b_path,
+                m4b_tmp,
                 chapters_meta,
                 title=book.title,
                 author=book.author or "",
                 ffmpeg=settings.ffmpeg,
                 bitrate=settings.audio_bitrate,
             )
+            os.replace(m4b_tmp, m4b_path)
         except audio_utils.FFmpegError as exc:
             log.warning("m4b 生成失败，保留 mp3：%s", exc)
             m4b_path = None
@@ -103,6 +109,9 @@ def assemble(
         "duration_ms": total_ms,
         "chapters": chapters_meta,
         "segment_count": len(ready),
+        # 只合成了部分章节时为 True
+        "partial": len(ready) < len(segments),
+        "total_segments": len(segments),
     }
     (out_dir / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"

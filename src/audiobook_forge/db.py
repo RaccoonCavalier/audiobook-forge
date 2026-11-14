@@ -237,12 +237,23 @@ class Database:
             rows = conn.execute(query, params).fetchall()
         return [self._row_to_segment(r) for r in rows]
 
-    def pending_segments(self, book_id: str) -> list[Segment]:
+    def pending_segments(
+        self, book_id: str, chapters: list[int] | None = None
+    ) -> list[Segment]:
+        """待合成的分片。chapters 为 None 表示全书，否则只取指定章节（0 基下标）。"""
+        query = (
+            "SELECT * FROM segments WHERE book_id=? "
+            "AND status IN ('pending','failed','running')"
+        )
+        params: list = [book_id]
+        if chapters:
+            placeholders = ",".join("?" * len(chapters))
+            query += f" AND chapter_index IN ({placeholders})"
+            params.extend(int(c) for c in chapters)
+        query += " ORDER BY seq"
+
         with self.connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM segments WHERE book_id=? AND status IN ('pending','failed','running') ORDER BY seq",
-                (book_id,),
-            ).fetchall()
+            rows = conn.execute(query, params).fetchall()
         return [self._row_to_segment(r) for r in rows]
 
     def next_pending_segment(self, book_id: str) -> Segment | None:
@@ -292,6 +303,26 @@ class Database:
             stats[row["status"]] = row["n"]
         stats["total"] = sum(v for k, v in stats.items() if k != "total")
         return stats
+
+    def chapter_segment_stats(self, book_id: str) -> dict[int, dict[str, int]]:
+        """每一章的分片总数与已完成数，供界面按需勾选时展示。"""
+        with self.connect() as conn:
+            rows = conn.execute(
+                """SELECT chapter_index,
+                          COUNT(*) AS total,
+                          SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS done,
+                          SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed
+                   FROM segments WHERE book_id=? GROUP BY chapter_index""",
+                (book_id,),
+            ).fetchall()
+        return {
+            int(r["chapter_index"]): {
+                "total": int(r["total"]),
+                "done": int(r["done"] or 0),
+                "failed": int(r["failed"] or 0),
+            }
+            for r in rows
+        }
 
     @staticmethod
     def _row_to_segment(row: sqlite3.Row) -> Segment:

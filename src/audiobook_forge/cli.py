@@ -100,6 +100,7 @@ async def _run(args, action: str) -> int:
         read_headings=not args.no_headings,
         make_m4b=not args.no_m4b,
         skip_llm=args.no_llm,
+        chapters=_parse_chapters(getattr(args, "chapters", None)),
     )
     try:
         if action == "run":
@@ -118,7 +119,8 @@ async def _run(args, action: str) -> int:
         elif action == "synthesize":
             stats = await pipeline.synthesize(args.book_id, options, _progress_printer())
             print()
-            print(f"✅ 合成完成：成功 {stats.ok}（缓存 {stats.cached}），失败 {stats.failed}")
+            scope = f"（{len(options.chapters)} 章）" if options.chapters else ""
+            print(f"✅ 合成完成{scope}：成功 {stats.ok}（缓存 {stats.cached}），失败 {stats.failed}")
             for seq, err in stats.failures[:10]:
                 print(f"   ! {seq}: {err[:120]}")
         elif action == "assemble":
@@ -128,6 +130,30 @@ async def _run(args, action: str) -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"\n❌ 失败：{exc}", file=sys.stderr)
         return 1
+
+
+def _parse_chapters(spec: str | None) -> list[int] | None:
+    """把 "1,3,5-7" 解析成 0 基下标列表。无效输入抛 ValueError。"""
+    if not spec:
+        return None
+    out: list[int] = []
+    for part in spec.replace("，", ",").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            left, _, right = part.partition("-")
+            start = int(left)
+            end = int(right) if right else start
+            if start > end:
+                start, end = end, start
+            out.extend(range(start - 1, end))
+        else:
+            out.append(int(part) - 1)
+    chapters = sorted({c for c in out if c >= 0})
+    if not chapters:
+        raise ValueError(f"章节范围无效：{spec}")
+    return chapters
 
 
 def cmd_build(args) -> int:
@@ -235,6 +261,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_synth.add_argument("--no-headings", action="store_true")
     p_synth.add_argument("--no-m4b", action="store_true")
     p_synth.add_argument("--no-llm", action="store_true")
+    p_synth.add_argument("--chapters", help="只合成指定章节，如 1,3,5-7（从 1 开始）")
     p_synth.set_defaults(func=lambda a: asyncio.run(_run(a, "synthesize")), no_llm=False)
 
     p_assemble = sub.add_parser("assemble", help="把已合成的分片拼接导出")
@@ -251,6 +278,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_build.add_argument("--no-llm", action="store_true")
     p_build.add_argument("--no-headings", action="store_true")
     p_build.add_argument("--no-m4b", action="store_true")
+    p_build.add_argument("--chapters", help="只合成指定章节，如 1,3,5-7（从 1 开始）")
     p_build.set_defaults(func=cmd_build)
 
     p_status = sub.add_parser("status", help="查看配置与提供商状态")
