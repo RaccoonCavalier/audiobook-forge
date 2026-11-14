@@ -1,0 +1,26 @@
+services:
+  forge:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: audiobook-forge:latest
+    container_name: audiobook-forge
+    restart: unless-stopped
+    ports:
+      - "8848:8848"
+    env_file:
+      - ../.env
+    environment:
+      # 容器内固定路径，别改成相对路径
+      ABF_DATA_DIR: /data
+      ABF_HOST: 0.0.0.0
+      ABF_PORT: "8848"
+    volumes:
+      # 左边换成 NAS 上的真实路径，例如 /volume1/docker/audiobook/data
+      - ./data:/data
+    # 想限制资源（NAS 上很有用），取消下面注释
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: "2.0"
+    #       memory: 2G

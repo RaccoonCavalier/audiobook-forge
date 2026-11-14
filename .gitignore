@@ -1,0 +1,28 @@
+# 运行数据（书籍、音频、数据库）不入库
+/data/
+/out/
+.tmp_test/
+*.db
+*.db-journal
+*.sqlite
+
+# 密钥
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Audiobook Forge · 有声书工坊</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">🎧</span>
+    <div>
+      <h1>Audiobook Forge</h1>
+      <p class="tagline">EPUB / TXT / Markdown → 有声书</p>
+    </div>
+  </div>
+  <div class="status" id="status">连接中…</div>
+</header>
+
+<main class="layout">
+  <aside class="sidebar">
+    <div class="dropzone" id="dropzone">
+      <input type="file" id="fileInput" accept=".epub,.txt,.md,.markdown" hidden>
+      <div class="dz-icon">＋</div>
+      <p><strong>点击或拖入文件</strong></p>
+      <p class="muted">epub / txt / md，最大 200MB</p>
+    </div>
+    <div class="shelf-head">
+      <h2>书架</h2>
+      <button class="ghost small" id="refreshBtn" title="刷新">↻</button>
+    </div>
+    <ul class="shelf" id="shelf"></ul>
+  </aside>
+
+  <section class="detail" id="detail">
+    <div class="empty">
+      <div class="empty-icon">📚</div>
+      <h2>还没有选中书</h2>
+      <p class="muted">上传一本书，或从左侧书架里挑一本</p>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
