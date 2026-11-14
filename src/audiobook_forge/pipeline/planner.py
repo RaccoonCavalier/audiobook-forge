@@ -13,8 +13,16 @@ def build_segments(
     settings: Settings,
     *,
     read_headings: bool = True,
+    single_voice: bool = False,
+    forced_voice: str | None = None,
 ) -> list[Segment]:
+    """把书拆成分段。
+
+    single_voice=True 时所有内容（旁白、对白、标题）统一用一个音色，
+    适合轻小说这类"对话没有明确说话人标记、自动判角色容易判错"的文本。
+    """
     narrator = cast.narrator_voice
+    unified = (forced_voice or narrator) if single_voice else narrator
     min_chars = settings.segment_min_chars
     max_chars = settings.segment_max_chars
     segments: list[Segment] = []
@@ -31,7 +39,9 @@ def build_segments(
             if not text:
                 continue
 
-            if block.type == "dialogue":
+            if single_voice:
+                voice = unified
+            elif block.type == "dialogue":
                 voice = block.voice or cast.voice_of(block.speaker, narrator)
             else:
                 voice = block.voice or narrator

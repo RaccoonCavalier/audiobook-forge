@@ -152,6 +152,16 @@ function renderDetail() {
       <button class="ghost" id="previewBtn">🎧 试听音色</button>
     </div>
 
+    <div class="voice-mode">
+      <label class="toggle" title="轻小说等难以判断说话人的文本，建议开启">
+        <input type="checkbox" id="singleVoice"> 单声线（全书一个音色）
+      </label>
+      <span class="voice-pick" id="voicePick" hidden>
+        <select id="singleVoiceSel"></select>
+        <span class="muted small" id="voicePickHint">重新分段后生效</span>
+      </span>
+    </div>
+
     <div id="jobArea"></div>
     <div id="previewArea"></div>
 
@@ -199,6 +209,8 @@ function renderDetail() {
   $("#synthBtn").onclick = () => startJob("synthesize");
   $("#assembleBtn").onclick = () => startJob("assemble");
   $("#previewBtn").onclick = openPreview;
+
+  bindVoiceMode();
 
   bindChapterSelection(d);
   loadSegments();
@@ -263,14 +275,29 @@ async function startJob(action, chapters) {
   if (!id) return;
   const buttons = document.querySelectorAll(".actions button, .chapter-tools button");
   buttons.forEach((b) => (b.disabled = true));
+
+  const singleBox = $("#singleVoice");
+  const singleVoice = !!(singleBox && singleBox.checked);
+  const voiceSel = $("#singleVoiceSel");
+  const voice = singleVoice && voiceSel ? voiceSel.value : null;
+
+  const payload = {};
+  if (chapters && chapters.length) payload.chapters = chapters;
+  if (singleVoice) {
+    payload.single_voice = true;
+    if (voice) payload.voice = voice;
+  }
+
   try {
     const res = await api(`/api/books/${id}/${action}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(chapters && chapters.length ? { chapters } : {}),
+      body: JSON.stringify(payload),
     });
-    const label = actionLabel(action) + (chapters && chapters.length ? `（${chapters.length} 章）` : "");
-    toast(label + " 已开始");
+    const suffix =
+      (chapters && chapters.length ? `（${chapters.length} 章）` : "") +
+      (singleVoice ? "（单声线）" : "");
+    toast(actionLabel(action) + suffix + " 已开始");
     pollJob(res.job_id);
   } catch (e) {
     toast(e.message, true);
@@ -617,6 +644,45 @@ async function saveSettings() {
     toast(e.message, true);
   } finally {
     btn.disabled = false;
+  }
+}
+
+/* ---------------------------------------------------------------- 单声线 */
+
+const VOICE_MODE_KEY = "abf.singleVoice";
+const VOICE_NAME_KEY = "abf.singleVoiceName";
+
+async function bindVoiceMode() {
+  const box = $("#singleVoice");
+  const pick = $("#voicePick");
+  const sel = $("#singleVoiceSel");
+  if (!box || !pick || !sel) return;
+
+  box.checked = localStorage.getItem(VOICE_MODE_KEY) === "1";
+  pick.hidden = !box.checked;
+
+  box.onchange = () => {
+    localStorage.setItem(VOICE_MODE_KEY, box.checked ? "1" : "0");
+    pick.hidden = !box.checked;
+    if (box.checked) loadVoices();
+  };
+
+  if (box.checked) loadVoices();
+}
+
+async function loadVoices() {
+  const sel = $("#singleVoiceSel");
+  if (!sel || sel.dataset.loaded === "1") return;
+  try {
+    const data = await api("/api/voices");
+    const voices = data.voices || [];
+    sel.innerHTML = voices.map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join("");
+    const saved = localStorage.getItem(VOICE_NAME_KEY);
+    if (saved && voices.includes(saved)) sel.value = saved;
+    sel.dataset.loaded = "1";
+    sel.onchange = () => localStorage.setItem(VOICE_NAME_KEY, sel.value);
+  } catch (e) {
+    toast(e.message, true);
   }
 }
 

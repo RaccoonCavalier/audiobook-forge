@@ -39,6 +39,10 @@ class RunOptions:
     force_reanalyze: bool = False
     # 只合成指定章节（0 基下标）。None / 空列表 = 全书
     chapters: list[int] | None = None
+    # 单声线模式：所有内容统一用一个音色（轻小说等难以判定说话人的场景）
+    single_voice: bool = False
+    # 单声线模式下指定音色；None = 用旁白音色
+    voice: str | None = None
 
 
 class Pipeline:
@@ -59,6 +63,18 @@ class Pipeline:
 
     def out_dir(self, book_id: str) -> Path:
         return self.book_dir(book_id) / "out"
+
+    def plan_file(self, book_id: str) -> Path:
+        return self.book_dir(book_id) / "plan.json"
+
+    @staticmethod
+    def _plan_signature(options: RunOptions) -> dict:
+        """记录影响分段的选项，合成前比对，变了就重新分段。"""
+        return {
+            "read_headings": options.read_headings,
+            "single_voice": options.single_voice,
+            "voice": options.voice,
+        }
 
     # ------------------------------------------------------------- 读取/写入
 
@@ -141,11 +157,20 @@ class Pipeline:
         options: RunOptions,
     ) -> int:
         segments = build_segments(
-            book, cast, self.settings, read_headings=options.read_headings
+            book,
+            cast,
+            self.settings,
+            read_headings=options.read_headings,
+            single_voice=options.single_voice,
+            forced_voice=options.voice,
         )
         if not segments:
             raise ValueError("没有可朗读的内容（可能全部被判定为 skip）")
         self.db.replace_segments(book.id, segments)
+        self.plan_file(book.id).write_text(
+            json.dumps(self._plan_signature(options), ensure_ascii=False),
+            encoding="utf-8",
+        )
         return len(segments)
 
     async def synthesize(
@@ -156,6 +181,24 @@ class Pipeline:
     ) -> SynthStats:
         book = self.load_book(book_id)
         scope = f"所选 {len(options.chapters)} 章" if options.chapters else "全书"
+
+        # 声线模式/标题朗读等设置变了，旧分段就作废，需要重新生成
+        if self.db.segments_for_book(book_id):
+            stored: dict = {}
+            sig_file = self.plan_file(book_id)
+            if sig_file.is_file():
+                try:
+                    stored = json.loads(sig_file.read_text(encoding="utf-8"))
+                except ValueError:
+                    stored = {}
+            wanted = self._plan_signature(options)
+            if stored != wanted:
+                cast = self.load_cast(book_id)
+                if cast is not None:
+                    self.plan(book, cast, options)
+                    mode = "单声线" if options.single_voice else "多角色"
+                    await _emit(progress, "合成", 0, 0, f"声线设置已变，按{mode}重新分段")
+
         pending = self.db.pending_segments(book_id, options.chapters)
         if not pending:
             stats = SynthStats(total=0)

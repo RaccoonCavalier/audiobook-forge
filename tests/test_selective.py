@@ -102,7 +102,62 @@ def test_assemble_marks_partial(env, sample_txt: Path) -> None:
     assert manifest["partial"] is False
 
 
-# ---------------------------------------------------------------- 中止
+# ---------------------------------------------------------------- 单声线
+
+
+def test_single_voice_collapses_to_one_timbre(env, sample_txt: Path) -> None:
+    book, total = _prepared(env, sample_txt)
+    settings, db, pipeline = env
+
+    multi = db.segments_for_book(book.id)
+    assert len({s.voice for s in multi}) > 1, "多角色分段应该有多种音色"
+
+    analyzed = pipeline.load_book(book.id)
+    cast = pipeline.load_cast(book.id)
+    assert cast is not None
+
+    pipeline.plan(analyzed, cast, RunOptions(single_voice=True))
+    single = db.segments_for_book(book.id)
+    assert len({s.voice for s in single}) == 1
+    assert single[0].voice == cast.narrator_voice
+
+    # 也可以指定具体音色
+    pipeline.plan(analyzed, cast, RunOptions(single_voice=True, voice="茉莉"))
+    assert {s.voice for s in db.segments_for_book(book.id)} == {"茉莉"}
+
+
+def test_synthesize_replans_when_voice_mode_changes(env, sample_txt: Path) -> None:
+    """已经按多角色分好段后，改用单声线合成，应自动重新分段。"""
+    book, _ = _prepared(env, sample_txt)
+    settings, db, pipeline = env
+
+    assert len({s.voice for s in db.segments_for_book(book.id)}) > 1
+
+    stats = asyncio.run(pipeline.synthesize(book.id, RunOptions(single_voice=True)))
+
+    segments = db.segments_for_book(book.id)
+    assert len({s.voice for s in segments}) == 1
+    assert stats.ok == len(segments)
+    assert stats.failed == 0
+    assert db.segment_stats(book.id)["done"] == len(segments)
+
+    # 计划签名落盘，重复合成不会再次重分段
+    plan_file = pipeline.plan_file(book.id)
+    assert plan_file.is_file()
+    assert '"single_voice": true' in plan_file.read_text(encoding="utf-8")
+
+
+def test_voice_mode_signature_prevents_replan(env, sample_txt: Path) -> None:
+    book, _ = _prepared(env, sample_txt)
+    settings, db, pipeline = env
+
+    asyncio.run(pipeline.synthesize(book.id, RunOptions(single_voice=True)))
+    seq_before = [s.seq for s in db.segments_for_book(book.id)]
+
+    stats = asyncio.run(pipeline.synthesize(book.id, RunOptions(single_voice=True)))
+    # 没有待合成分片，也不会重建
+    assert stats.total == 0
+    assert [s.seq for s in db.segments_for_book(book.id)] == seq_before
 
 
 def test_cancel_keeps_finished_segments(env, sample_txt: Path, monkeypatch) -> None:

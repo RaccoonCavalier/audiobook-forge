@@ -49,6 +49,9 @@ class RunRequest(BaseModel):
     force_reanalyze: bool = False
     # 只合成这些章节（0 基下标）；不传 = 全书
     chapters: list[int] | None = None
+    # 单声线：全书统一一个音色（轻小说等难判说话人的场景）
+    single_voice: bool = False
+    voice: str | None = None
 
 
 class PreviewRequest(BaseModel):
@@ -329,6 +332,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             skip_llm=req.skip_llm,
             force_reanalyze=req.force_reanalyze,
             chapters=list(req.chapters) if req.chapters else None,
+            single_voice=req.single_voice,
+            voice=(req.voice or None) if req.single_voice else None,
         )
 
     def _start(book_id: str, action: str, req: RunRequest) -> str:
