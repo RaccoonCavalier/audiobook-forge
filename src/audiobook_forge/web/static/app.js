@@ -610,6 +610,11 @@ async function openSettings() {
     $("#ttsVoice").value = s.tts.openai.voice || "";
     $("#ttsKey").value = "";
 
+    const audio = s.audio || {};
+    $("#gapIntra").value = audio.intra_block_gap_ms ?? 200;
+    $("#gapBlock").value = audio.block_gap_ms ?? 700;
+    $("#gapChapter").value = audio.chapter_gap_ms ?? 1600;
+
     renderTtsState();
     renderLlmState();
   } catch (e) {
@@ -713,6 +718,9 @@ async function saveSettings() {
         tts_openai_model: $("#ttsModel").value.trim(),
         tts_openai_voice: $("#ttsVoice").value.trim(),
         tts_openai_api_key: $("#ttsKey").value.trim(),
+        gap_intra: Number($("#gapIntra").value) || 0,
+        gap_block: Number($("#gapBlock").value) || 0,
+        gap_chapter: Number($("#gapChapter").value) || 0,
       }),
     });
     settingsCache = s;

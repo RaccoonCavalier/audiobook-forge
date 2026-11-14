@@ -69,6 +69,10 @@ class SettingsUpdate(BaseModel):
     tts_openai_model: str | None = None
     tts_openai_voice: str | None = None
     tts_openai_api_key: str | None = None
+    # 停顿（毫秒）
+    gap_intra: int | None = None
+    gap_block: int | None = None
+    gap_chapter: int | None = None
 
 
 class RunRequest(BaseModel):
@@ -209,6 +213,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "has_key": bool(settings.llm.api_key),
             },
             "presets": LLM_PRESETS,
+            "audio": {
+                "intra_block_gap_ms": settings.intra_block_gap_ms,
+                "block_gap_ms": settings.block_gap_ms,
+                "chapter_gap_ms": settings.chapter_gap_ms,
+            },
         }
 
     @app.get("/api/settings")
@@ -241,6 +250,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             settings.tts.openai.narrator_voice = req.tts_openai_voice.strip()
         if req.tts_openai_api_key is not None and req.tts_openai_api_key.strip():
             settings.tts.openai.api_key = req.tts_openai_api_key.strip()
+
+        for field, attr in (
+            ("gap_intra", "intra_block_gap_ms"),
+            ("gap_block", "block_gap_ms"),
+            ("gap_chapter", "chapter_gap_ms"),
+        ):
+            value = getattr(req, field)
+            if value is not None and 0 <= value <= 10000:
+                setattr(settings, attr, value)
 
         path = save_runtime_overrides(settings)
         log.info("设置已更新，写入 %s", path)

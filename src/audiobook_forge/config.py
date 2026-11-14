@@ -155,6 +155,8 @@ class Settings:
     tts: TTSSettings
     segment_min_chars: int
     segment_max_chars: int
+    # 三种停顿（毫秒）：同一段被切开的分片之间 / 段落之间 / 章节之间
+    intra_block_gap_ms: int
     chapter_gap_ms: int
     block_gap_ms: int
     ffmpeg: str
@@ -253,8 +255,9 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         ),
         segment_min_chars=_int("ABF_SEGMENT_MIN_CHARS", 12),
         segment_max_chars=_int("ABF_SEGMENT_MAX_CHARS", 120),
-        chapter_gap_ms=_int("ABF_CHAPTER_GAP_MS", 1200),
-        block_gap_ms=_int("ABF_BLOCK_GAP_MS", 250),
+        intra_block_gap_ms=_int("ABF_INTRA_BLOCK_GAP_MS", 200),
+        chapter_gap_ms=_int("ABF_CHAPTER_GAP_MS", 1600),
+        block_gap_ms=_int("ABF_BLOCK_GAP_MS", 700),
         ffmpeg=_str("ABF_FFMPEG", "ffmpeg"),
         log_level=_str("ABF_LOG_LEVEL", "INFO").upper(),
     )
@@ -308,6 +311,12 @@ def apply_runtime_overrides(settings: Settings) -> None:
     if isinstance(llm.get("api_key"), str) and llm["api_key"].strip():
         settings.llm.api_key = llm["api_key"].strip()
 
+    audio = data.get("audio") or {}
+    for key in ("intra_block_gap_ms", "block_gap_ms", "chapter_gap_ms"):
+        value = audio.get(key)
+        if isinstance(value, int) and 0 <= value <= 10000:
+            setattr(settings, key, value)
+
 
 def save_runtime_overrides(settings: Settings) -> Path:
     """原子写入运行时配置。密钥只落在 data/ 下，不进仓库。"""
@@ -326,6 +335,11 @@ def save_runtime_overrides(settings: Settings) -> Path:
             "base_url": settings.llm.base_url,
             "model": settings.llm.model,
             "api_key": settings.llm.api_key,
+        },
+        "audio": {
+            "intra_block_gap_ms": settings.intra_block_gap_ms,
+            "block_gap_ms": settings.block_gap_ms,
+            "chapter_gap_ms": settings.chapter_gap_ms,
         },
     }
     path = runtime_path(settings)

@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS segments (
     book_id         TEXT NOT NULL,
     chapter_index   INTEGER NOT NULL,
     chapter_title   TEXT NOT NULL DEFAULT '',
+    block_index     INTEGER NOT NULL DEFAULT 0,
     seq             INTEGER NOT NULL,
     speaker         TEXT,
     voice           TEXT NOT NULL,
@@ -92,6 +93,7 @@ class Database:
         with self.connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
+        self._migrate()
 
     # ---------------------------------------------------------------- books
 
@@ -203,14 +205,14 @@ class Database:
         with self.connect() as conn:
             conn.execute("DELETE FROM segments WHERE book_id=?", (book_id,))
             conn.executemany(
-                """INSERT INTO segments (book_id, chapter_index, chapter_title, seq, speaker,
-                                         voice, style, text, text_hash, status, audio_path,
-                                         duration_ms, attempts, error)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                """INSERT INTO segments (book_id, chapter_index, chapter_title, block_index,
+                                         seq, speaker, voice, style, text, text_hash, status,
+                                         audio_path, duration_ms, attempts, error)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 [
-                    (s.book_id, s.chapter_index, s.chapter_title, s.seq, s.speaker,
-                     s.voice, s.style, s.text, s.text_hash, s.status.value,
-                     s.audio_path, s.duration_ms, s.attempts, s.error)
+                    (s.book_id, s.chapter_index, s.chapter_title, s.block_index,
+                     s.seq, s.speaker, s.voice, s.style, s.text, s.text_hash,
+                     s.status.value, s.audio_path, s.duration_ms, s.attempts, s.error)
                     for s in segments
                 ],
             )
@@ -218,11 +220,12 @@ class Database:
     def add_segment(self, seg: Segment) -> int:
         with self.connect() as conn:
             cur = conn.execute(
-                """INSERT INTO segments (book_id, chapter_index, chapter_title, seq, speaker,
-                                         voice, style, text, text_hash, status)
-                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
-                (seg.book_id, seg.chapter_index, seg.chapter_title, seg.seq, seg.speaker,
-                 seg.voice, seg.style, seg.text, seg.text_hash, seg.status.value),
+                """INSERT INTO segments (book_id, chapter_index, chapter_title, block_index,
+                                         seq, speaker, voice, style, text, text_hash, status)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (seg.book_id, seg.chapter_index, seg.chapter_title, seg.block_index,
+                 seg.seq, seg.speaker, seg.voice, seg.style, seg.text,
+                 seg.text_hash, seg.status.value),
             )
             return int(cur.lastrowid)
 
@@ -326,11 +329,26 @@ class Database:
 
     @staticmethod
     def _row_to_segment(row: sqlite3.Row) -> Segment:
+        keys = row.keys()
         return Segment(
             id=row["id"], book_id=row["book_id"], chapter_index=row["chapter_index"],
-            chapter_title=row["chapter_title"], seq=row["seq"], speaker=row["speaker"],
+            chapter_title=row["chapter_title"],
+            block_index=row["block_index"] if "block_index" in keys else 0,
+            seq=row["seq"], speaker=row["speaker"],
             voice=row["voice"], style=row["style"], text=row["text"],
             text_hash=row["text_hash"], status=SegmentStatus(row["status"]),
             audio_path=row["audio_path"], duration_ms=row["duration_ms"],
             attempts=row["attempts"], error=row["error"],
         )
+
+    def _migrate(self) -> None:
+        """给老数据库补列：block_index（段落序号，用于区分句间/段间停顿）。"""
+        with self.connect() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(segments)")}
+            if "block_index" not in cols:
+                conn.execute(
+                    "ALTER TABLE segments ADD COLUMN block_index INTEGER NOT NULL DEFAULT 0"
+                )
+                # 历史分片大多是「一段一片」，按段落级处理，
+                # 否则会被当成同段切开而只留 200ms 句间停顿。
+                conn.execute("UPDATE segments SET block_index = seq")

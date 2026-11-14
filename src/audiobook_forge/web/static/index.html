@@ -88,6 +88,25 @@
       </div>
     </section>
 
+    <section class="modal-section">
+      <h3>停顿（毫秒）</h3>
+      <p class="muted small">
+        觉得段落之间赶得慌，就把「段落」调大（800–1200 比较自然）；
+        章节开头想留空白就调大「章节」。改完需要重新导出才生效。
+      </p>
+      <div class="gap-grid">
+        <label class="field">句间（同段切开）
+          <input id="gapIntra" type="number" min="0" max="5000" step="50" value="200">
+        </label>
+        <label class="field">段落之间
+          <input id="gapBlock" type="number" min="0" max="5000" step="50" value="700">
+        </label>
+        <label class="field">章节之间
+          <input id="gapChapter" type="number" min="0" max="8000" step="100" value="1600">
+        </label>
+      </div>
+    </section>
+
     <div class="modal-actions">
       <button class="ghost" id="settingsCancel">取消</button>
       <button class="primary" id="settingsSave">保存</button>

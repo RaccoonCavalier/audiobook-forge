@@ -29,7 +29,7 @@ def build_segments(
     seq = 0
 
     for chapter in book.chapters:
-        for block in chapter.blocks:
+        for block_index, block in enumerate(chapter.blocks):
             if block.type == "skip":
                 continue
             if block.type == "heading" and not read_headings:
@@ -58,6 +58,7 @@ def build_segments(
                         book_id=book.id,
                         chapter_index=chapter.index,
                         chapter_title=chapter.title,
+                        block_index=block_index,
                         seq=seq,
                         speaker=block.speaker if block.type == "dialogue" else None,
                         voice=voice,

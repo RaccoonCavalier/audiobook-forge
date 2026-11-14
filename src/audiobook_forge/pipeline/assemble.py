@@ -1,4 +1,4 @@
-﻿"""把合成好的分片拼成整本有声书，并生成章节标记。"""
+"""把合成好的分片拼成整本有声书，并生成章节标记。"""
 
 from __future__ import annotations
 
@@ -13,6 +13,15 @@ from ..models import Book, Segment, SegmentStatus
 from . import audio as audio_utils
 
 log = logging.getLogger(__name__)
+
+
+def _gap_between(prev: Segment, nxt: Segment, settings: Settings) -> int:
+    """三档停顿：同一段切开的分片要短，段落之间中等，章节之间最长。"""
+    if prev.chapter_index != nxt.chapter_index:
+        return settings.chapter_gap_ms
+    if prev.block_index != nxt.block_index:
+        return settings.block_gap_ms
+    return settings.intra_block_gap_ms
 
 
 def assemble(
@@ -44,21 +53,15 @@ def assemble(
 
     def chapter_entries(segs: list[Segment]) -> list[tuple[Path, int]]:
         return [
-            (Path(s.audio_path), settings.block_gap_ms if i < len(segs) - 1 else 0)
+            (Path(s.audio_path), _gap_between(s, segs[i + 1], settings) if i < len(segs) - 1 else 0)
             for i, s in enumerate(segs)
         ]
 
-    # 整本：同章小间隔，跨章大间隔，最后一段不留尾巴
+    # 整本：按边界类型决定间隔，最后一段不留尾巴
     entries: list[tuple[Path, int]] = []
-    for gi, (_idx, _title, segs) in enumerate(groups):
-        for i, seg in enumerate(segs):
-            if i < len(segs) - 1:
-                gap = settings.block_gap_ms
-            elif gi + 1 < len(groups):
-                gap = settings.chapter_gap_ms
-            else:
-                gap = 0
-            entries.append((Path(seg.audio_path), gap))
+    for i, seg in enumerate(ready):
+        gap = _gap_between(seg, ready[i + 1], settings) if i + 1 < len(ready) else 0
+        entries.append((Path(seg.audio_path), gap))
 
     # 逐段探测时长，累加成章节区间
     cursor = 0

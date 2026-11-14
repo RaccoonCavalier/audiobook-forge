@@ -101,6 +101,9 @@ class Segment(BaseModel):
     book_id: str
     chapter_index: int
     chapter_title: str = ""
+    # 段落在章节内的序号：同一段落被切成多片时 block_index 相同，
+    # 拼接时据此决定用"句间停顿"还是"段落停顿"
+    block_index: int = 0
     seq: int
     speaker: str | None = None
     voice: str
