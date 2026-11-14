@@ -507,9 +507,117 @@ function init() {
     toast("已刷新");
   };
 
+  $("#settingsBtn").onclick = openSettings;
+  $("#settingsClose").onclick = closeSettings;
+  $("#settingsCancel").onclick = closeSettings;
+  $("#settingsSave").onclick = saveSettings;
+  $("#settingsModal").onclick = (e) => {
+    if (e.target.id === "settingsModal") closeSettings();
+  };
+  $("#ttsProvider").onchange = renderTtsState;
+  $("#llmPreset").onchange = applyLlmPreset;
+
   loadStatus();
   loadBooks();
   setInterval(loadStatus, 20000);
+}
+
+/* ---------------------------------------------------------------- 设置 */
+
+let settingsCache = null;
+
+async function openSettings() {
+  const modal = $("#settingsModal");
+  if (!modal) return;
+  modal.hidden = false;
+  try {
+    const s = await api("/api/settings");
+    settingsCache = s;
+
+    const ttsSel = $("#ttsProvider");
+    ttsSel.innerHTML = s.tts.providers
+      .map(
+        (p) =>
+          `<option value="${p.name}">${esc(p.label)}${p.ready ? "" : "（未配置）"}</option>`
+      )
+      .join("");
+    ttsSel.value = s.tts.provider;
+
+    const preset = $("#llmPreset");
+    preset.innerHTML = s.presets
+      .map((p) => `<option value="${p.id}">${esc(p.label)}</option>`)
+      .join("");
+
+    $("#llmEnabled").checked = s.llm.enabled;
+    $("#llmBase").value = s.llm.base_url;
+    $("#llmModel").value = s.llm.model;
+    $("#llmKey").value = "";
+
+    renderTtsState();
+    renderLlmState();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+function closeSettings() {
+  const modal = $("#settingsModal");
+  if (modal) modal.hidden = true;
+}
+
+function renderTtsState() {
+  if (!settingsCache) return;
+  const name = $("#ttsProvider").value;
+  const p = settingsCache.tts.providers.find((x) => x.name === name);
+  const el = $("#ttsState");
+  if (el) el.textContent = p ? `${p.label}：${p.ready ? "可用" : "未就绪"} · ${p.message}` : "";
+}
+
+function renderLlmState() {
+  const el = $("#llmState");
+  if (!settingsCache || !el) return;
+  const s = settingsCache.llm;
+  el.textContent = [
+    s.enabled ? "已启用" : "已关闭（用规则兜底）",
+    s.usable ? "地址与密钥齐全" : "地址或密钥不完整",
+    s.has_key ? "已保存密钥" : "尚未保存密钥",
+  ].join(" · ");
+}
+
+function applyLlmPreset() {
+  if (!settingsCache) return;
+  const p = settingsCache.presets.find((x) => x.id === $("#llmPreset").value);
+  if (!p) return;
+  if (p.base_url) $("#llmBase").value = p.base_url;
+  if (p.model) $("#llmModel").value = p.model;
+}
+
+async function saveSettings() {
+  const btn = $("#settingsSave");
+  btn.disabled = true;
+  try {
+    const s = await api("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tts_provider: $("#ttsProvider").value,
+        llm_enabled: $("#llmEnabled").checked,
+        llm_base_url: $("#llmBase").value.trim(),
+        llm_model: $("#llmModel").value.trim(),
+        llm_api_key: $("#llmKey").value.trim(),
+      }),
+    });
+    settingsCache = s;
+    renderTtsState();
+    renderLlmState();
+    closeSettings();
+    toast("设置已保存，下一个任务生效");
+    await loadStatus();
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 document.addEventListener("DOMContentLoaded", init);

@@ -95,27 +95,40 @@ abf build 我的小说.epub --provider mimo
 
 ## 配置要点
 
-全部走环境变量（`.env` 或 docker compose 注入），完整清单见 `.env.example`。
+两种方式，优先级从高到低：
+
+1. **Web 界面 → 右上角「⚙ 设置」**：切换 TTS 提供商、开关 LLM、填地址/模型/密钥。改完立刻生效（下一个任务），存在 `data/settings.json`，重启后仍保留。
+2. **环境变量**（`.env` 或 docker compose 注入），完整清单见 `.env.example`。
+
+> `data/settings.json` 优先级高于 `.env`。想回到纯环境变量管理，删掉这个文件即可。密钥只存在 `data/` 下，`.gitignore` 与 `.dockerignore` 都已排除。
 
 ### TTS 提供商
 
 | provider | 需要配置 | 特点 |
 |---|---|---|
 | `mock` | 无 | 本地合成正弦波，用于跑通流程、写测试 |
-| `mimo` | `ABF_MIMO_API_KEY` | 小米 MiMo TTS，支持自然语言风格、方言、角色扮演 |
+| `mimo` | `ABF_MIMO_API_KEY` | 小米 MiMo TTS，支持自然语言风格、方言、角色扮演；当前限时免费 |
 | `xfyun` | `ABF_XFYUN_APP_ID` + 密码或密钥对 | 讯飞超拟人合成，发音人极多（`x6_*` 系列） |
 
 ### LLM
 
-任何 OpenAI 兼容端点：
+任何 OpenAI 兼容端点，界面里有三个预设：
+
+| 预设 | 地址 | 模型 |
+|---|---|---|
+| SiliconFlow · DeepSeek V3.2 | `https://api.siliconflow.cn/v1` | `deepseek-ai/DeepSeek-V3.2` |
+| DeepSeek 官方 | `https://api.deepseek.com/v1` | `deepseek-chat` |
+| 小米 MiMo | `https://api.xiaomimimo.com/v1` | `mimo-v2.6-flash` |
+
+也可以写成环境变量：
 
 ```bash
-ABF_LLM_BASE_URL=https://api.deepseek.com/v1
+ABF_LLM_BASE_URL=https://api.siliconflow.cn/v1
 ABF_LLM_API_KEY=sk-xxx
-ABF_LLM_MODEL=deepseek-chat
+ABF_LLM_MODEL=deepseek-ai/DeepSeek-V3.2
 ```
 
-不配也能跑（`ABF_LLM_ENABLED=false`），但会退化成纯正则分拣：只能认出"张三说道"这种标准句式，复杂对话会标成"未知角色"。
+不配也能跑（`ABF_LLM_ENABLED=false`），但会退化成纯正则分拣：只能认出"张三说道"这种标准句式，复杂对话会标成"未知角色"，朗读指令也基本为空。
 
 ---
 

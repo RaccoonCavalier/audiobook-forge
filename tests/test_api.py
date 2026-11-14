@@ -151,3 +151,69 @@ def test_synthesize_without_cast_fails_clearly(client: TestClient, sample_txt: P
     job = _wait(client, res.json()["job_id"])
     assert job["status"] == "failed"
     assert "角色表" in job["message"]
+
+
+def test_settings_roundtrip(client: TestClient, tmp_path: Path) -> None:
+    res = client.get("/api/settings")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["tts"]["provider"] == "mock"
+    assert {p["name"] for p in body["tts"]["providers"]} == {"mock", "mimo", "xfyun"}
+    assert "api_key" not in body["llm"], "接口不能回传密钥"
+
+    upd = client.post(
+        "/api/settings",
+        json={
+            "tts_provider": "mimo",
+            "llm_enabled": True,
+            "llm_base_url": "https://api.siliconflow.cn/v1",
+            "llm_model": "deepseek-ai/DeepSeek-V3.2",
+            "llm_api_key": "sk-test-secret",
+        },
+    )
+    assert upd.status_code == 200, upd.text
+    data = upd.json()
+    assert data["tts"]["provider"] == "mimo"
+    assert data["llm"]["model"] == "deepseek-ai/DeepSeek-V3.2"
+    assert data["llm"]["has_key"] is True
+    assert "sk-test-secret" not in upd.text
+
+    runtime = tmp_path / "data" / "settings.json"
+    assert runtime.is_file()
+    import json as _json
+
+    saved = _json.loads(runtime.read_text(encoding="utf-8"))
+    assert saved["tts"]["provider"] == "mimo"
+    assert saved["llm"]["api_key"] == "sk-test-secret"
+
+    # 留空 key 不会清掉已保存的密钥
+    again = client.post("/api/settings", json={"llm_api_key": ""})
+    assert again.json()["llm"]["has_key"] is True
+
+
+def test_settings_rejects_unknown_provider(client: TestClient) -> None:
+    res = client.post("/api/settings", json={"tts_provider": "openai"})
+    assert res.status_code == 400
+
+
+def test_runtime_overrides_beat_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from audiobook_forge.config import load_settings, save_runtime_overrides
+
+    monkeypatch.setenv("ABF_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ABF_TTS_PROVIDER", "mock")
+    monkeypatch.setenv("ABF_LLM_ENABLED", "false")
+
+    settings = load_settings()
+    assert settings.tts.provider == "mock"
+
+    settings.tts.provider = "mimo"
+    settings.llm.enabled = True
+    settings.llm.api_key = "sk-from-ui"
+    settings.llm.model = "deepseek-ai/DeepSeek-V3.2"
+    save_runtime_overrides(settings)
+
+    reloaded = load_settings()
+    assert reloaded.tts.provider == "mimo"
+    assert reloaded.llm.enabled is True
+    assert reloaded.llm.api_key == "sk-from-ui"
+    assert reloaded.llm.model == "deepseek-ai/DeepSeek-V3.2"

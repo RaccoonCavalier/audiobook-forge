@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -172,7 +173,7 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
 
     data_dir = Path(_str("ABF_DATA_DIR", "./data")).expanduser().resolve()
 
-    return Settings(
+    settings = Settings(
         data_dir=data_dir,
         host=_str("ABF_HOST", "127.0.0.1"),
         port=_int("ABF_PORT", 8848),
@@ -219,3 +220,60 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         ffmpeg=_str("ABF_FFMPEG", "ffmpeg"),
         log_level=_str("ABF_LOG_LEVEL", "INFO").upper(),
     )
+    # 界面里改过的设置存在 data/settings.json，优先级高于 .env
+    apply_runtime_overrides(settings)
+    return settings
+
+
+RUNTIME_FILE = "settings.json"
+
+
+def runtime_path(settings: Settings) -> Path:
+    return settings.data_dir / RUNTIME_FILE
+
+
+def apply_runtime_overrides(settings: Settings) -> None:
+    """把 data/settings.json 里的改动叠加到配置上（Web 设置面板用）。"""
+    path = runtime_path(settings)
+    if not path.is_file():
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(data, dict):
+        return
+
+    tts = data.get("tts") or {}
+    provider = str(tts.get("provider") or "").lower()
+    if provider in {"mock", "mimo", "xfyun"}:
+        settings.tts.provider = provider
+
+    llm = data.get("llm") or {}
+    if "enabled" in llm:
+        settings.llm.enabled = bool(llm["enabled"])
+    if isinstance(llm.get("base_url"), str) and llm["base_url"].strip():
+        settings.llm.base_url = llm["base_url"].strip()
+    if isinstance(llm.get("model"), str) and llm["model"].strip():
+        settings.llm.model = llm["model"].strip()
+    if isinstance(llm.get("api_key"), str) and llm["api_key"].strip():
+        settings.llm.api_key = llm["api_key"].strip()
+
+
+def save_runtime_overrides(settings: Settings) -> Path:
+    """原子写入运行时配置。密钥只落在 data/ 下，不进仓库。"""
+    payload = {
+        "tts": {"provider": settings.tts.provider},
+        "llm": {
+            "enabled": settings.llm.enabled,
+            "base_url": settings.llm.base_url,
+            "model": settings.llm.model,
+            "api_key": settings.llm.api_key,
+        },
+    }
+    path = runtime_path(settings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+    return path

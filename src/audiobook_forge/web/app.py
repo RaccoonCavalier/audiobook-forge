@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from .. import __version__
-from ..config import Settings, load_settings
+from ..config import Settings, load_settings, save_runtime_overrides
 from ..db import Database
 from ..ingest import SUPPORTED, detect_format
 from ..models import Job, JobStatus, SegmentStatus
@@ -31,6 +31,14 @@ STATIC_DIR = Path(__file__).parent / "static"
 MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 
 TASKS: dict[str, asyncio.Task] = {}
+
+
+class SettingsUpdate(BaseModel):
+    tts_provider: str | None = None
+    llm_enabled: bool | None = None
+    llm_base_url: str | None = None
+    llm_model: str | None = None
+    llm_api_key: str | None = None
 
 
 class RunRequest(BaseModel):
@@ -104,6 +112,90 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "concurrency": settings.tts.concurrency,
             "data_dir": str(settings.data_dir),
         }
+
+    # ------------------------------------------------------------ 设置
+
+    LLM_PRESETS = [
+        {
+            "id": "siliconflow-deepseek",
+            "label": "SiliconFlow · DeepSeek V3.2",
+            "base_url": "https://api.siliconflow.cn/v1",
+            "model": "deepseek-ai/DeepSeek-V3.2",
+        },
+        {
+            "id": "deepseek",
+            "label": "DeepSeek 官方",
+            "base_url": "https://api.deepseek.com/v1",
+            "model": "deepseek-chat",
+        },
+        {
+            "id": "mimo",
+            "label": "小米 MiMo",
+            "base_url": "https://api.xiaomimimo.com/v1",
+            "model": "mimo-v2.6-flash",
+        },
+        {"id": "custom", "label": "自定义", "base_url": "", "model": ""},
+    ]
+
+    def _provider_status() -> list[dict]:
+        out = []
+        for name in ("mock", "mimo", "xfyun"):
+            try:
+                ok, message = create_tts(settings, name).health()
+            except Exception as exc:  # noqa: BLE001
+                ok, message = False, str(exc)
+            out.append(
+                {
+                    "name": name,
+                    "label": PROVIDER_LABELS.get(name, name),
+                    "ready": bool(ok),
+                    "message": message,
+                }
+            )
+        return out
+
+    def _settings_payload() -> dict:
+        return {
+            "tts": {
+                "provider": settings.tts.provider,
+                "concurrency": settings.tts.concurrency,
+                "providers": _provider_status(),
+            },
+            "llm": {
+                "enabled": settings.llm.enabled,
+                "base_url": settings.llm.base_url,
+                "model": settings.llm.model,
+                "usable": settings.llm.usable,
+                # 只告诉前端"有没有配 key"，绝不回传密钥本身
+                "has_key": bool(settings.llm.api_key),
+            },
+            "presets": LLM_PRESETS,
+        }
+
+    @app.get("/api/settings")
+    async def get_settings() -> dict:
+        return _settings_payload()
+
+    @app.post("/api/settings")
+    async def update_settings(req: SettingsUpdate) -> dict:
+        if req.tts_provider is not None:
+            if req.tts_provider not in {"mock", "mimo", "xfyun"}:
+                raise HTTPException(400, "未知的 TTS 提供商")
+            settings.tts.provider = req.tts_provider
+
+        if req.llm_enabled is not None:
+            settings.llm.enabled = req.llm_enabled
+        if req.llm_base_url is not None and req.llm_base_url.strip():
+            settings.llm.base_url = req.llm_base_url.strip()
+        if req.llm_model is not None and req.llm_model.strip():
+            settings.llm.model = req.llm_model.strip()
+        # 留空表示"不改"，避免误把已存的 key 清掉
+        if req.llm_api_key is not None and req.llm_api_key.strip():
+            settings.llm.api_key = req.llm_api_key.strip()
+
+        path = save_runtime_overrides(settings)
+        log.info("设置已更新，写入 %s", path)
+        return _settings_payload()
 
     # ------------------------------------------------------------ 书本管理
 
