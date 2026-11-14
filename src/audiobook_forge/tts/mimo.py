@@ -37,6 +37,7 @@ class MimoTTS(BaseTTS):
         timeout: float = 120.0,
         max_retries: int = 2,
         style_via_user_message: bool = True,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
@@ -45,12 +46,15 @@ class MimoTTS(BaseTTS):
         self.timeout = timeout
         self.max_retries = max_retries
         self.style_via_user_message = style_via_user_message
+        # 仅测试用：注入 MockTransport，生产环境留 None 走真实网络
+        self._transport = transport
         self._client: httpx.AsyncClient | None = None
 
     @property
     def client(self) -> httpx.AsyncClient:
         if self._client is None:
             self._client = httpx.AsyncClient(
+                transport=self._transport,
                 timeout=httpx.Timeout(self.timeout, connect=20.0),
                 headers={
                     "api-key": self.api_key,

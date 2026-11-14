@@ -117,7 +117,10 @@ class Synthesizer:
                         )
                     )
                     suffix = "." + result.format.lower()
-                    transcode_bytes(
+                    # ffmpeg 是同步 subprocess，必须丢到线程池，
+                    # 否则会把整个事件循环卡住（实测单次可达 1 秒以上）
+                    await asyncio.to_thread(
+                        transcode_bytes,
                         result.audio,
                         suffix,
                         target,

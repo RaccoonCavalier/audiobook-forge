@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
@@ -168,7 +169,9 @@ class Pipeline:
 
         async def on_segment(segment, status, error) -> None:  # noqa: ANN001
             state["done"] += 1
-            self.db.mark_segment(
+            # SQLite 写是同步 IO，放线程池，避免卡住事件循环（Web 端轮询会卡顿）
+            await asyncio.to_thread(
+                self.db.mark_segment,
                 segment.id,
                 status,
                 audio_path=str(segment.audio_path) if segment.audio_path else None,
@@ -225,7 +228,8 @@ class Pipeline:
                 await _emit(progress, "合成", stats.ok, stats.total, f"完成 {stats.ok}，失败 {stats.failed}")
 
             update("assemble", "拼接导出")
-            manifest = self.assemble_now(book_id, options)
+            # 拼接要跑多次 ffprobe + concat，耗时且阻塞，放线程池
+            manifest = await asyncio.to_thread(self.assemble_now, book_id, options)
 
             if job:
                 self.db.update_job(

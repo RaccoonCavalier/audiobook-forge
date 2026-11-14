@@ -1,0 +1,20 @@
+# 构建上下文瘦身：这些东西不该进镜像
+data/
+out/
+.tmp_test/
+.env
+.git/
+.gitignore
+.pytest_cache/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.db
+*.db-journal
+.venv/
+venv/
+tests/
+docs/
+docker/
+README.md
+LICENSE
